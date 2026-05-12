@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Redigera {{ fm.marke }} {{ fm.modell }}{% endblock %}
+{% block content %}
+<div class="form-page">
+  <a href="{{ url_for('fordonsbibliotek') }}" class="back-link">← Fordonsbibliotek</a>
+  <h1 class="page-title">Redigera fordonsmodell</h1>
+  <p class="form-note">⚠ Ändringar synkas automatiskt till alla bilar av samma märke, modell och årsmodell.</p>
+  {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+
+  <form method="post" class="form-card">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Märke *</label>
+        <input class="form-input" type="text" name="marke" value="{{ fm.marke }}" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Modell *</label>
+        <input class="form-input" type="text" name="modell" value="{{ fm.modell }}">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Årsmodell</label>
+      <input class="form-input" type="number" name="arsmodell" value="{{ fm.arsmodell or '' }}" placeholder="Lämna tomt för alla år">
+    </div>
+
+    <div class="form-section">
+      <h3 class="form-section__title">Serviceintervall (km)</h3>
+      <div class="intervall-grid">
+        {% for t in nedraknare_typer %}
+        {% set info = intervaller.get(t, {}) %}
+        {% set aktiv = info.get('aktiv', True) %}
+        {% set iv = info.get('intervall', '') %}
+        <div class="intervall-rad">
+          <label class="checkbox-item intervall-checkbox">
+            <input type="checkbox" name="aktiv_{{ t }}" value="1" id="aktiv_{{ t }}"
+                   {% if aktiv %}checked{% endif %} onchange="toggleIv('{{ t }}')">
+            <span class="checkbox-label">{{ t }}</span>
+          </label>
+          <input class="form-input intervall-input" type="number" name="iv_{{ t }}" id="iv_{{ t }}"
+                 value="{{ iv if iv is not none else '' }}" placeholder="km"
+                 {% if not aktiv %}disabled{% endif %}>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="form-section">
+      <h3 class="form-section__title">Egna servicetyper</h3>
+      <p class="form-section__desc">Lägg till eller ta bort fordonsspecifika servicetyper.</p>
+      <div id="egnaTyper">
+        {% for t, info in intervaller.items() %}
+        {% if t not in nedraknare_typer and info.get('aktiv') %}
+        <div class="intervall-rad egen-rad">
+          <input class="form-input" type="text" name="egen_namn" value="{{ t }}" placeholder="Namn">
+          <input class="form-input intervall-input" type="number" name="egen_km" value="{{ info.intervall or '' }}" placeholder="km">
+          <button type="button" class="delete-btn" onclick="this.parentNode.remove()">✕</button>
+        </div>
+        {% endif %}
+        {% endfor %}
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="laggTillEgen()">+ Lägg till servicetyp</button>
+    </div>
+
+    <div class="form-row-btns">
+      <a href="{{ url_for('fordonsbibliotek') }}" class="btn btn-ghost">Avbryt</a>
+      <button type="submit" class="btn btn-primary">Spara & synka bilar</button>
+    </div>
+  </form>
+</div>
+<script>
+function toggleIv(t) {
+  var cb = document.getElementById('aktiv_' + t);
+  var inp = document.getElementById('iv_' + t);
+  inp.disabled = !cb.checked;
+}
+function laggTillEgen() {
+  var cont = document.getElementById('egnaTyper');
+  var div = document.createElement('div');
+  div.className = 'intervall-rad egen-rad';
+  div.innerHTML = '<input class="form-input" type="text" name="egen_namn" placeholder="Namn, t.ex. Luftfjädring">' +
+    '<input class="form-input intervall-input" type="number" name="egen_km" placeholder="km">' +
+    '<button type="button" class="delete-btn" onclick="this.parentNode.remove()">✕</button>';
+  cont.appendChild(div);
+}
+</script>
+{% endblock %}

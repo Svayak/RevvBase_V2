@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Ny händelse – {{ bil.regnr }}{% endblock %}
+{% block content %}
+<div class="wizard-header">
+  <a href="{{ url_for('bil', bil_id=bil.id) }}" class="back-link">← {{ bil.regnr }}</a>
+  <h1 class="page-title">Ny händelse</h1>
+  <div class="wizard-steps">
+    <div class="wizard-step {% if steg == '1' %}active{% elif steg in ('2','3') %}done{% endif %}">1 Kilometer</div>
+    <div class="wizard-step-sep"></div>
+    <div class="wizard-step {% if steg == '2' %}active{% elif steg == '3' %}done{% endif %}">2 Typ</div>
+    <div class="wizard-step-sep"></div>
+    <div class="wizard-step {% if steg == '3' %}active{% endif %}">3 Detaljer</div>
+  </div>
+</div>
+
+{% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+
+{% if steg == "1" %}
+<form method="post" class="wizard-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="steg" value="1">
+  <div class="wizard-card">
+    <div class="wizard-card__icon">📍</div>
+    <h2 class="wizard-card__title">Ange aktuellt kilometertal</h2>
+    <div class="form-group">
+      <label class="form-label">Kilometer (km)</label>
+      <input class="form-input form-input--large" type="number" name="km"
+             value="{{ km }}" placeholder="t.ex. 125000" min="0" autofocus required>
+    </div>
+    <button type="submit" class="btn btn-primary btn-full">Fortsätt →</button>
+  </div>
+</form>
+
+{% elif steg == "2" %}
+<form method="post" class="wizard-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="steg" value="2">
+  <input type="hidden" name="km" value="{{ km }}">
+  <div class="wizard-card">
+    <div class="wizard-card__icon">🔧</div>
+    <h2 class="wizard-card__title">Välj typ av händelse</h2>
+    <p class="wizard-card__desc">Kilometertal: <strong>{{ km }} km</strong></p>
+    <div class="typ-knappar">
+      <button type="submit" name="typ" value="service" class="typ-btn typ-btn--service">
+        <span class="typ-btn__icon">🛠</span>
+        <span class="typ-btn__label">Service</span>
+        <span class="typ-btn__desc">Planerat underhåll och serviceåtgärder</span>
+      </button>
+      <button type="submit" name="typ" value="fel" class="typ-btn typ-btn--fel">
+        <span class="typ-btn__icon">⚠️</span>
+        <span class="typ-btn__label">Åtgärda fel</span>
+        <span class="typ-btn__desc">Felsökning, reparation, reklamation</span>
+      </button>
+      <button type="submit" name="typ" value="miltal" class="typ-btn typ-btn--miltal">
+        <span class="typ-btn__icon">📏</span>
+        <span class="typ-btn__label">Registrera miltal</span>
+        <span class="typ-btn__desc">Logga bara kilometerståndet</span>
+      </button>
+    </div>
+  </div>
+</form>
+
+{% elif steg == "3" %}
+<form method="post" class="wizard-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="steg" value="3">
+  <input type="hidden" name="km" value="{{ km }}">
+  <input type="hidden" name="typ" value="{{ typ }}">
+  <div class="wizard-card">
+    {% if typ == "service" %}
+    <div class="wizard-card__icon">🛠</div>
+    <h2 class="wizard-card__title">Serviceåtgärder</h2>
+    <p class="wizard-card__desc">{{ km }} km · Välj vad som utfördes</p>
+    <div class="checkbox-grid">
+      {% for t in service_typer %}
+      <label class="checkbox-item">
+        <input type="checkbox" name="service_typer" value="{{ t }}">
+        <span class="checkbox-label">{{ t }}</span>
+      </label>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="wizard-card__icon">⚠️</div>
+    <h2 class="wizard-card__title">Felbeskrivning</h2>
+    <p class="wizard-card__desc">{{ km }} km</p>
+    {% endif %}
+
+    <div class="form-group mt-lg">
+      <label class="form-label">{% if typ == "service" %}Övriga noteringar (valfritt){% else %}Beskriv felet och åtgärden *{% endif %}</label>
+      <textarea class="form-input form-textarea" name="beskrivning" rows="4"
+        {% if typ == "fel" %}required{% endif %}></textarea>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Datum</label>
+      <input class="form-input" type="date" name="datum" value="{{ today }}">
+    </div>
+    <div class="form-row-btns">
+      <a href="{{ url_for('ny_handelse', bil_id=bil.id, steg='2', km=km) }}" class="btn btn-ghost">← Tillbaka</a>
+      <button type="submit" class="btn btn-primary">Spara händelse ✓</button>
+    </div>
+  </div>
+</form>
+{% endif %}
+{% endblock %}

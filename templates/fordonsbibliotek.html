@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Fordonsbibliotek – Revvbase{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1 class="page-title">Fordonsbibliotek</h1>
+  <a href="{{ url_for('ny_fordonsmodell') }}" class="btn btn-primary">+ Lägg till modell</a>
+</div>
+
+{% if modeller %}
+<div class="bibliotek-lista">
+  {% for fm in modeller %}
+  <div class="bibliotek-kort">
+    <div class="bibliotek-kort__left">
+      <div class="bibliotek-kort__titel">{{ fm.marke }} {{ fm.modell }}</div>
+      {% if fm.arsmodell %}<div class="bibliotek-kort__ar">{{ fm.arsmodell }}</div>{% else %}<div class="bibliotek-kort__ar">Alla årsmodeller</div>{% endif %}
+    </div>
+    <div class="bibliotek-kort__intervall">
+      {% if fm.intervall_str %}
+        {% for rad in fm.intervall_str.split('|') %}
+          {% set delar = rad.split(':') %}
+          {% if delar|length == 3 and delar[2] == '1' and delar[1] %}
+          <span class="iv-chip">{{ delar[0] }}: {{ delar[1] }} km</span>
+          {% endif %}
+        {% endfor %}
+      {% endif %}
+    </div>
+    <div class="bibliotek-kort__actions">
+      <a href="{{ url_for('redigera_fordonsmodell', fm_id=fm.id) }}" class="btn btn-ghost btn-sm">Redigera</a>
+      <form method="post" action="{{ url_for('ta_bort_fordonsmodell', fm_id=fm.id) }}"
+            onsubmit="return confirm('Ta bort denna modellprofil?')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-danger btn-sm">Ta bort</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+  <p>Inga fordonsmodeller i biblioteket ännu.</p>
+  <a href="{{ url_for('ny_fordonsmodell') }}" class="btn btn-primary">Lägg till första modellen</a>
+</div>
+{% endif %}
+{% endblock %}

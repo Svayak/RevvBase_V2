@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}{{ bil.regnr }} – Revvbase{% endblock %}
+{% block content %}
+
+<div class="bil-header">
+  <div class="bil-header__left">
+    <a href="{{ url_for('index') }}" class="back-link">← Tillbaka</a>
+    {% if bil.fordonsnummer %}<div class="bil-fnum">Fordon {{ bil.fordonsnummer }}</div>{% endif %}
+    <div class="bil-regnr-large">{{ bil.regnr }}</div>
+    <div class="bil-meta">{{ bil.marke }} {{ bil.modell }}{% if bil.arsmodell %} · {{ bil.arsmodell }}{% endif %}</div>
+    {% if bil.notering %}<div class="bil-notering">{{ bil.notering }}</div>{% endif %}
+  </div>
+  <div class="bil-header__actions">
+    <a href="{{ url_for('print_bil', bil_id=bil.id) }}" class="btn btn-ghost btn-sm" target="_blank">🖨 Skriv ut</a>
+    <a href="{{ url_for('redigera_bil', bil_id=bil.id) }}" class="btn btn-ghost btn-sm">Redigera</a>
+    <form method="post" action="{{ url_for('ta_bort_bil', bil_id=bil.id) }}"
+          onsubmit="return confirm('Ta bort {{ bil.regnr }} och all historik?')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-danger btn-sm">Ta bort</button>
+    </form>
+    <a href="{{ url_for('ny_handelse', bil_id=bil.id) }}" class="btn btn-primary">+ Ny händelse</a>
+  </div>
+</div>
+
+<!-- Servicepanel -->
+{% if panel %}
+<section class="mil-panel">
+  <h2 class="section-title">Serviceöversikt</h2>
+  <div class="mil-grid">
+    {% for typ, info in panel.items() %}
+    {% set diff = info.diff %}
+    {% set iv = info.intervall %}
+    {% set aldrig = info.aldrig_gjort %}
+    {% if iv is none %}
+      {% set status = "unknown" %}
+    {% elif diff is none %}
+      {% set status = "unknown" %}
+    {% elif diff >= iv %}
+      {% set status = "warn" %}
+    {% elif diff >= iv * 0.8 %}
+      {% set status = "caution" %}
+    {% else %}
+      {% set status = "ok" %}
+    {% endif %}
+    <div class="mil-card mil-card--{{ status }}">
+      <div class="mil-card__label">{{ typ }}</div>
+      {% if iv is none %}
+        <div class="mil-card__value">–</div>
+        <div class="mil-card__sub">Kedjedrift</div>
+      {% else %}
+        <div class="mil-card__value">{{ diff if diff is not none else '?' }}</div>
+        <div class="mil-card__sub">/ {{ iv }} km{% if aldrig %}*{% endif %}</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  <div class="panel-fotnot">* Ej loggat – räknat från 0 km (fabriksny)</div>
+</section>
+{% endif %}
+
+<!-- Kommentarer -->
+<section class="kommentarer-sektion">
+  <h2 class="section-title">Noteringar</h2>
+  <form method="post" action="{{ url_for('ny_kommentar', bil_id=bil.id) }}" class="kommentar-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <textarea class="form-input form-textarea kommentar-input" name="text"
+      placeholder="Lägg till en notering, t.ex. 'Ska kontrolleras vid nästa service' eller 'Konstigt ljud från vänster fram…'" rows="2"></textarea>
+    <button type="submit" class="btn btn-ghost btn-sm" style="align-self:flex-end;">Lägg till</button>
+  </form>
+  {% if kommentarer %}
+  <div class="kommentar-lista">
+    {% for k in kommentarer %}
+    <div class="kommentar-kort">
+      <div class="kommentar-kort__text">{{ k.text }}</div>
+      <div class="kommentar-kort__meta">
+        {% if k.skapad_av %}<span>{{ k.skapad_av }}</span> · {% endif %}
+        <span>{{ k.datum }}</span>
+        <form method="post" action="{{ url_for('ta_bort_kommentar', bil_id=bil.id, k_id=k.id) }}"
+              style="display:inline;" onsubmit="return confirm('Ta bort denna notering?')">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="kommentar-delete-btn" title="Ta bort">✕</button>
+        </form>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+
+<!-- Historik -->
+<section class="historik">
+  <div class="historik-header">
+    <h2 class="section-title">Historik</h2>
+    <div class="historik-header__right">
+      {% if senaste_km %}<span class="current-mil">Nuv: <strong>{{ senaste_km }} km</strong></span>{% endif %}
+      <select class="filter-select" onchange="window.location=this.value">
+        <option value="{{ url_for('bil', bil_id=bil.id) }}" {% if not filter_typ %}selected{% endif %}>Alla åtgärder</option>
+        {% for t in service_typer %}
+        <option value="{{ url_for('bil', bil_id=bil.id, filter=t) }}" {% if filter_typ == t %}selected{% endif %}>{{ t }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+
+  {% if handelser %}
+  <div class="tidslinje">
+    {% for h in handelser %}
+    <div class="handelse-kort handelse-kort--{{ h.typ }}">
+      <div class="handelse-kort__left">
+        <div class="handelse-kort__typ-badge">{{ "SERVICE" if h.typ == "service" else ("FEL" if h.typ == "fel" else "KM") }}</div>
+        <div class="handelse-kort__miltal">{{ h.km }} <span>km</span></div>
+        <div class="handelse-kort__datum">{{ h.datum }}</div>
+        {% if h.skapad_av %}<div class="handelse-kort__av">{{ h.skapad_av }}</div>{% endif %}
+      </div>
+      <div class="handelse-kort__right">
+        {% if h.service_typer %}
+        <div class="service-tags" id="tags-{{ h.id }}"></div>
+        <script>
+          (function(){
+            var raw = {{ h.service_typer | safe }};
+            var cont = document.getElementById('tags-{{ h.id }}');
+            raw.forEach(function(t){ var s=document.createElement('span'); s.className='service-tag'; s.textContent=t; cont.appendChild(s); });
+          })();
+        </script>
+        {% endif %}
+        {% if h.beskrivning %}<div class="handelse-kort__beskrivning">{{ h.beskrivning }}</div>{% endif %}
+      </div>
+      <div class="handelse-kort__btns">
+        <a href="{{ url_for('redigera_handelse', bil_id=bil.id, h_id=h.id) }}" class="edit-btn" title="Redigera">✎</a>
+        <form method="post" action="{{ url_for('ta_bort_handelse', bil_id=bil.id, h_id=h.id) }}"
+              onsubmit="return confirm('Ta bort denna händelse?')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="delete-btn" title="Ta bort">✕</button>
+        </form>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <p>Ingen historik{% if filter_typ %} för "{{ filter_typ }}"{% endif %}.</p>
+    {% if filter_typ %}
+    <a href="{{ url_for('bil', bil_id=bil.id) }}" class="btn btn-ghost">Visa alla</a>
+    {% else %}
+    <a href="{{ url_for('ny_handelse', bil_id=bil.id) }}" class="btn btn-primary">Lägg till första händelsen</a>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

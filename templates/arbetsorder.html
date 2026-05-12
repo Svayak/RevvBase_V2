@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8">
+  <title>Arbetsorder – {{ today }}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; font-size: 11pt; color: #000; background: #fff; }
+
+    .sida {
+      padding: 18mm 20mm;
+      page-break-after: always;
+      min-height: 100vh;
+    }
+    .sida:last-child { page-break-after: avoid; }
+
+    .ao-rubrik { font-size: 11pt; text-transform: uppercase; letter-spacing: 0.1em; color: #888; margin-bottom: 6px; }
+    .ao-regnr { font-size: 28pt; font-weight: bold; letter-spacing: 0.06em; margin-bottom: 4px; }
+    .ao-meta { font-size: 10pt; color: #444; margin-bottom: 4px; }
+    .ao-kommentar { font-size: 10pt; color: #666; font-style: italic; margin-bottom: 2px; }
+    .ao-km { font-size: 10pt; color: #444; }
+
+    .divider { border: none; border-top: 2px solid #000; margin: 14px 0; }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th { text-align: left; font-size: 9pt; padding: 5px 8px; border-bottom: 2px solid #000; }
+    td { padding: 7px 8px; font-size: 10pt; border-bottom: 1px solid #ddd; vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+
+    .status-warn    { color: #c0392b; font-weight: bold; }
+    .status-caution { color: #b7770d; font-weight: bold; }
+
+    .sign-section { margin-top: 32px; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+    .sign-box { border-top: 1px solid #000; padding-top: 6px; font-size: 9pt; color: #555; }
+
+    .ao-datum { font-size: 9pt; color: #888; margin-top: 6px; }
+
+    @media print {
+      body { background: #fff; }
+      .no-print { display: none; }
+    }
+
+    .no-print {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      background: #1F4E79;
+      color: #fff;
+      border: none;
+      padding: 10px 20px;
+      font-size: 14px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+<button class="no-print" onclick="window.print()">🖨 Skriv ut</button>
+
+{% for item in bilar_data %}
+<div class="sida">
+  <div class="ao-rubrik">Arbetsorder</div>
+  <div class="ao-regnr">{{ item.bil.regnr }}</div>
+  <div class="ao-meta">{{ item.bil.marke }} {{ item.bil.modell }}{% if item.bil.arsmodell %} · {{ item.bil.arsmodell }}{% endif %}</div>
+  {% if item.bil.fordonsnummer %}<div class="ao-meta">Fordonsnummer: <strong>{{ item.bil.fordonsnummer }}</strong></div>{% endif %}
+  {% if item.bil.notering %}<div class="ao-kommentar">{{ item.bil.notering }}</div>{% endif %}
+  <div class="ao-km">Nuvarande km: <strong>{{ item.senaste_km }} km</strong></div>
+  <div class="ao-datum">Utfärdad: {{ today }}</div>
+
+  <hr class="divider">
+
+  <table>
+    <thead>
+      <tr>
+        <th>Åtgärd</th>
+        <th>Status</th>
+        <th>Senast utfört vid</th>
+        <th>Intervall</th>
+        <th>Kvar / Försenad</th>
+        <th>Utfört ✓</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in item.atgarder %}
+      <tr>
+        <td><strong>{{ a.typ }}</strong></td>
+        <td class="status-{{ a.status }}">
+          {% if a.status == "warn" %}⚠ Försenad{% else %}! Snart{% endif %}
+        </td>
+        <td>{% if item.senaste_km - a.diff > 0 %}{{ item.senaste_km - a.diff }} km{% else %}Ej loggat*{% endif %}</td>
+        <td>{{ a.intervall }} km</td>
+        <td class="status-{{ a.status }}">
+          {% if a.kvar <= 0 %}{{ a.kvar * -1 }} km sedan{% else %}{{ a.kvar }} km kvar{% endif %}
+        </td>
+        <td style="width:60px; border-bottom: 1px solid #aaa;">&nbsp;</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if item.atgarder | selectattr('diff') | list | selectattr('diff', 'equalto', item.senaste_km) | list %}
+  <p style="font-size:8pt; color:#888; margin-top:8px;">* Ej loggat – räknat från 0 km (fabriksny)</p>
+  {% endif %}
+
+  <div class="sign-section">
+    <div class="sign-box">Mekaniker / Signatur</div>
+    <div class="sign-box">Datum utfört</div>
+  </div>
+</div>
+{% endfor %}
+
+</body>
+</html>

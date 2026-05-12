@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Importera miltal – Revvbase{% endblock %}
+{% block content %}
+<div class="form-page" style="max-width: 560px">
+  <a href="{{ url_for('index') }}" class="back-link">← Tillbaka</a>
+  <h1 class="page-title">Importera miltal</h1>
+
+  <div class="form-card">
+    <p style="font-size:0.9rem; color:var(--text-muted); margin-bottom:0.5rem;">
+      Ladda upp en CSV-fil med kolumnerna <code>regnr</code> och <code>km</code>.<br>
+      Varje rad registreras som en miltal-post med dagens datum. Mellanslag i reg.nr spelar ingen roll.
+    </p>
+
+    <div class="csv-example">
+      <div class="csv-example__title">Exempel på CSV-format:</div>
+      <pre>regnr,km
+ABC123,85000
+XYZ456,142500
+DEF789,67300</pre>
+    </div>
+
+    {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+
+    <form method="post" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-group">
+        <label class="form-label">Välj CSV-fil</label>
+        <input class="form-input" type="file" name="csv_fil" accept=".csv" required>
+      </div>
+      <button type="submit" class="btn btn-primary btn-full">Importera</button>
+    </form>
+  </div>
+
+  {% if resultat %}
+  <div style="margin-top:1.5rem;">
+    <h2 class="section-title">Resultat</h2>
+    <div class="import-lista">
+      {% for r in resultat %}
+      <div class="import-rad import-rad--{{ r.status }}">
+        <span class="import-rad__regnr">{{ r.regnr }}</span>
+        <span class="import-rad__msg">{{ r.msg }}</span>
+        <span class="import-rad__badge">{{ "✓" if r.status == "ok" else "✕" }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    <div style="margin-top:0.75rem; font-size:0.85rem; color:var(--text-muted);">
+      {{ resultat | selectattr("status","equalto","ok") | list | length }} importerade ·
+      {{ resultat | selectattr("status","equalto","fel") | list | length }} misslyckades
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

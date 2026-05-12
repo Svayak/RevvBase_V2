@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Redigera händelse – {{ bil.regnr }}{% endblock %}
+{% block content %}
+<div class="form-page">
+  <a href="{{ url_for('bil', bil_id=bil.id) }}" class="back-link">← {{ bil.regnr }}</a>
+  <h1 class="page-title">Redigera händelse</h1>
+  {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+
+  <form method="post" class="form-card">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Datum</label>
+        <input class="form-input" type="date" name="datum" value="{{ h.datum }}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Kilometertal (km)</label>
+        <input class="form-input" type="number" name="km" value="{{ h.km }}" required>
+      </div>
+    </div>
+
+    {% if h.typ == "service" %}
+    <div class="form-group">
+      <label class="form-label">Serviceåtgärder</label>
+      <div class="checkbox-grid">
+        {% for t in service_typer %}
+        <label class="checkbox-item">
+          <input type="checkbox" name="service_typer" value="{{ t }}" {% if t in service_typer_vald %}checked{% endif %}>
+          <span class="checkbox-label">{{ t }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="form-group">
+      <label class="form-label">{% if h.typ == "service" %}Noteringar{% else %}Felbeskrivning{% endif %}</label>
+      <textarea class="form-input form-textarea" name="beskrivning" rows="4">{{ h.beskrivning or '' }}</textarea>
+    </div>
+
+    <div class="form-row-btns">
+      <a href="{{ url_for('bil', bil_id=bil.id) }}" class="btn btn-ghost">Avbryt</a>
+      <button type="submit" class="btn btn-primary">Spara ändringar</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

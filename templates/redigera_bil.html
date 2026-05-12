@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}Redigera {{ bil.regnr }}{% endblock %}
+{% block content %}
+<div class="form-page">
+  <a href="{{ url_for('bil', bil_id=bil.id) }}" class="back-link">← {{ bil.regnr }}</a>
+  <h1 class="page-title">Redigera bil</h1>
+  {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+
+  <form method="post" class="form-card">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Registreringsnummer</label>
+        <input class="form-input form-input--regnr" type="text" value="{{ bil.regnr }}" disabled>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Fordonsnummer</label>
+        <input class="form-input" type="text" name="fordonsnummer" value="{{ bil.fordonsnummer or '' }}" placeholder="t.ex. Bil 1">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Märke *</label>
+        <input class="form-input" type="text" name="marke" value="{{ bil.marke }}" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Modell *</label>
+        <input class="form-input" type="text" name="modell" value="{{ bil.modell }}">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Årsmodell</label>
+      <input class="form-input" type="number" name="arsmodell" value="{{ bil.arsmodell or '' }}">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Notering</label>
+      <input class="form-input" type="text" name="notering" value="{{ bil.notering or '' }}">
+    </div>
+
+    <div class="form-section">
+      <h3 class="form-section__title">Serviceintervall (km)</h3>
+      <p class="form-section__desc">Ändra intervall utan att historiken påverkas.</p>
+      <div class="intervall-grid">
+        {% for t in nedraknare_typer %}
+        {% set info = intervaller.get(t, {}) %}
+        {% set aktiv = info.get('aktiv', False) %}
+        {% set iv = info.get('intervall', '') %}
+        <div class="intervall-rad">
+          <label class="checkbox-item intervall-checkbox">
+            <input type="checkbox" name="aktiv_{{ t }}" value="1" id="aktiv_{{ t }}"
+                   {% if aktiv %}checked{% endif %} onchange="toggleIv('{{ t }}')">
+            <span class="checkbox-label">{{ t }}</span>
+          </label>
+          <input class="form-input intervall-input" type="number" name="iv_{{ t }}" id="iv_{{ t }}"
+                 value="{{ iv if iv is not none else '' }}" placeholder="km"
+                 {% if not aktiv %}disabled{% endif %}>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+
+    <div class="form-section">
+      <h3 class="form-section__title">Egna servicetyper</h3>
+      <p class="form-section__desc">Lägg till eller ta bort bilspecifika servicetyper.</p>
+      <div id="egnaTyper">
+        {% for t, info in intervaller.items() %}
+        {% if info.get('egen') %}
+        <div class="intervall-rad egen-rad">
+          <input class="form-input" type="text" name="egen_namn" value="{{ t }}" placeholder="Namn">
+          <input class="form-input intervall-input" type="number" name="egen_km" value="{{ info.intervall or '' }}" placeholder="km">
+          <button type="button" class="delete-btn" onclick="this.parentNode.remove()">✕</button>
+        </div>
+        {% endif %}
+        {% endfor %}
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="laggTillEgen()">+ Lägg till servicetyp</button>
+    </div>
+
+    <div class="form-row-btns">
+      <a href="{{ url_for('bil', bil_id=bil.id) }}" class="btn btn-ghost">Avbryt</a>
+      <button type="submit" class="btn btn-primary">Spara ändringar</button>
+    </div>
+  </form>
+</div>
+
+<script>
+function toggleIv(t) {
+  var cb = document.getElementById('aktiv_' + t);
+  var inp = document.getElementById('iv_' + t);
+  inp.disabled = !cb.checked;
+}
+function laggTillEgen() {
+  var cont = document.getElementById('egnaTyper');
+  var div = document.createElement('div');
+  div.className = 'intervall-rad egen-rad';
+  div.innerHTML = '<input class="form-input" type="text" name="egen_namn" placeholder="Namn, t.ex. Luftfjädring">' +
+    '<input class="form-input intervall-input" type="number" name="egen_km" placeholder="km">' +
+    '<button type="button" class="delete-btn" onclick="this.parentNode.remove()">✕</button>';
+  cont.appendChild(div);
+}
+</script>
+{% endblock %}

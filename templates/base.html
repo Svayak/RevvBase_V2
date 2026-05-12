@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Revvbase{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <header class="site-header">
+    <a href="{{ url_for('index') }}" class="logo">
+      <svg width="132" height="47" viewBox="0 0 680 240.05" role="img" style="display:block;">
+        <title>Revvbase</title>
+        <text x="340" y="120" text-anchor="middle" font-size="96" fill="#f0a500" style="font-family:'Arial Black','Helvetica Neue',Arial,sans-serif;font-weight:900;">REVV</text>
+        <text x="340" y="200" text-anchor="middle" font-size="96" fill="#e8eaec" style="font-family:'Arial Black','Helvetica Neue',Arial,sans-serif;font-weight:900;">BASE</text>
+      </svg>
+    </a>
+    <nav class="header-nav">
+      <a href="{{ url_for('index') }}" class="nav-link">Alla bilar</a>
+      <a href="{{ url_for('kommande') }}" class="nav-link">Kommande service</a>
+      <a href="{{ url_for('fordonsbibliotek') }}" class="nav-link">Fordonsbibliotek</a>
+      {% if current_user.is_authenticated and current_user.roll == "admin" %}
+      <a href="{{ url_for('admin') }}" class="nav-link">Admin</a>
+      {% endif %}
+      <a href="{{ url_for('ny_bil') }}" class="nav-btn">+ Ny bil</a>
+      <div class="user-menu">
+        <span class="user-name">{{ current_user.namn }}</span>
+        <a href="{{ url_for('mitt_konto') }}" class="nav-link" style="font-size:0.8rem;">Konto</a>
+        <a href="{{ url_for('logout') }}" class="nav-link" style="font-size:0.8rem; color:#e05050;">Logga ut</a>
+      </div>
+    </nav>
+  </header>
+
+  <main class="main-content">
+    {% block content %}{% endblock %}
+  </main>
+
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

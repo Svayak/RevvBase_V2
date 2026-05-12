@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Mitt konto – Revvbase{% endblock %}
+{% block content %}
+<div class="form-page">
+  <h1 class="page-title">Mitt konto</h1>
+  <div style="font-size:0.9rem; color:var(--text-muted); margin-bottom:1.5rem;">
+    Inloggad som <strong>{{ current_user.namn }}</strong> (@{{ current_user.username }})
+  </div>
+
+  {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+  {% if success %}<div class="alert" style="background:#0d2b1a; border:1px solid #1e4d2b; color:#6eff9f;">{{ success }}</div>{% endif %}
+
+  <form method="post" class="form-card" style="max-width:400px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <h3 class="form-section__title" style="margin-bottom:1rem;">Byt lösenord</h3>
+    <div class="form-group">
+      <label class="form-label">Nuvarande lösenord</label>
+      <input class="form-input" type="password" name="gammalt" required>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Nytt lösenord</label>
+      <input class="form-input" type="password" name="nytt" id="nytt" required>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Bekräfta nytt lösenord</label>
+      <input class="form-input" type="password" name="nytt2" id="nytt2" required>
+    </div>
+    <button type="submit" class="btn btn-primary">Spara</button>
+  </form>
+</div>
+{% endblock %}

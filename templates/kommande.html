@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Kommande service – Revvbase{% endblock %}
+{% block content %}
+
+<div class="page-header">
+  <h1 class="page-title">Kommande service</h1>
+  <span class="page-subtitle">Åtgärder inom 20% av serviceintervallet</span>
+</div>
+
+{% if bilar_service %}
+<form method="post" action="{{ url_for('arbetsorder') }}" target="_blank">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="kommande-toolbar">
+    <label class="checkbox-item">
+      <input type="checkbox" id="valj-alla" onchange="valjAlla(this)">
+      <span class="checkbox-label">Välj alla</span>
+    </label>
+    <button type="submit" class="btn btn-primary">🖨 Exportera arbetsorder</button>
+  </div>
+
+  <div class="kommande-lista">
+    {% for item in bilar_service %}
+    <div class="kommande-kort-wrapper">
+      <label class="kommande-checkbox-label">
+        <input type="checkbox" name="bil_ids" value="{{ item.bil.id }}" class="bil-checkbox">
+      </label>
+      <a href="{{ url_for('bil', bil_id=item.bil.id) }}" class="kommande-kort">
+        <div class="kommande-kort__header">
+          {% if item.bil.fordonsnummer %}<span class="kommande-fnum">Fordon {{ item.bil.fordonsnummer }}</span>{% endif %}
+          <span class="kommande-regnr">{{ item.bil.regnr }}</span>
+          <span class="kommande-modell">{{ item.bil.marke }} {{ item.bil.modell }}</span>
+          {% if item.bil.arsmodell %}<span class="kommande-ar">{{ item.bil.arsmodell }}</span>{% endif %}
+          {% if item.bil.notering %}<span class="kommande-notering">{{ item.bil.notering }}</span>{% endif %}
+        </div>
+        <div class="kommande-kort__atgarder">
+          {% for a in item.atgarder %}
+          <div class="kommande-atgard kommande-atgard--{{ a.status }}">
+            <span class="kommande-atgard__namn">{{ a.typ }}</span>
+            {% if a.diff >= a.intervall %}
+              <span class="kommande-atgard__info">⚠ {{ a.diff - a.intervall }} km försenad</span>
+            {% else %}
+              <span class="kommande-atgard__info">{{ a.intervall - a.diff }} km kvar</span>
+            {% endif %}
+            <div class="kommande-progress">
+              <div class="kommande-progress__bar kommande-progress__bar--{{ a.status }}"
+                   style="width: {{ [[a.diff * 100 // a.intervall, 0] | max, 100] | min }}%"></div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </a>
+    </div>
+    {% endfor %}
+  </div>
+</form>
+
+{% else %}
+<div class="empty-state">
+  <p>🎉 Inga bilar har service inom 20% av intervallet just nu.</p>
+</div>
+{% endif %}
+
+<script>
+function valjAlla(cb) {
+  document.querySelectorAll('.bil-checkbox').forEach(function(el){ el.checked = cb.checked; });
+}
+</script>
+{% endblock %}

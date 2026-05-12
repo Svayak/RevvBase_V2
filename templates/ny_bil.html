@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}Lägg till bil – Revvbase{% endblock %}
+{% block content %}
+<div class="form-page">
+  <a href="{{ url_for('index') }}" class="back-link">← Tillbaka</a>
+  <h1 class="page-title">Lägg till bil</h1>
+  {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+
+  <form method="post" class="form-card" id="bilForm">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Registreringsnummer *</label>
+        <input class="form-input form-input--regnr" type="text" name="regnr"
+               placeholder="ABC 123" maxlength="10" autofocus required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Fordonsnummer</label>
+        <input class="form-input" type="text" name="fordonsnummer" placeholder="t.ex. Bil 1">
+      </div>
+    </div>
+
+    {% if bibliotek %}
+    <div class="form-group">
+      <label class="form-label">Välj från fordonsbibliotek</label>
+      <select class="form-input" id="bibliotekval" onchange="valjFranBibliotek(this)">
+        <option value="">– Välj eller fyll i manuellt nedan –</option>
+        {% for fm in bibliotek %}
+        <option value="{{ fm.id }}" data-marke="{{ fm.marke }}" data-modell="{{ fm.modell }}"
+                data-ar="{{ fm.arsmodell or '' }}" data-intervall="{{ fm.intervall_str or '' }}">
+          {{ fm.marke }} {{ fm.modell }}{% if fm.arsmodell %} ({{ fm.arsmodell }}){% endif %}
+        </option>
+        {% endfor %}
+        <option value="manuell">– Fyll i manuellt (ny modell) –</option>
+      </select>
+    </div>
+    {% endif %}
+
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Märke *</label>
+        <input class="form-input" type="text" name="marke" id="marke" placeholder="Volvo" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Modell *</label>
+        <input class="form-input" type="text" name="modell" id="modell" placeholder="V70">
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Årsmodell</label>
+      <input class="form-input" type="number" name="arsmodell" id="arsmodell" placeholder="2018" min="1900" max="2100">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Notering (valfritt)</label>
+      <input class="form-input" type="text" name="notering" placeholder="T.ex. Samtrans">
+    </div>
+
+    <div class="form-section">
+      <h3 class="form-section__title">Serviceintervall (km)</h3>
+      <p class="form-section__desc" id="ivDesc">Välj fordon ovan för att fylla i automatiskt, eller ange manuellt.</p>
+      <div class="intervall-grid" id="intervallGrid">
+        {% for t in nedraknare_typer %}
+        <div class="intervall-rad">
+          <label class="checkbox-item intervall-checkbox">
+            <input type="checkbox" name="aktiv_{{ t }}" value="1" id="aktiv_{{ t }}" checked onchange="toggleIv('{{ t }}')">
+            <span class="checkbox-label">{{ t }}</span>
+          </label>
+          <input class="form-input intervall-input" type="number" name="iv_{{ t }}" id="iv_{{ t }}" placeholder="km">
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="form-section">
+      <h3 class="form-section__title">Egna servicetyper</h3>
+      <p class="form-section__desc">Lägg till fordonsspecifika servicetyper, t.ex. "Luftfjädring".</p>
+      <div id="egnaTyper"></div>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="laggTillEgen()">+ Lägg till servicetyp</button>
+    </div>
+
+    <button type="submit" class="btn btn-primary btn-full">Lägg till bil</button>
+  </form>
+</div>
+
+<script>
+var nedraknareTyper = {{ nedraknare_typer | tojson }};
+
+function valjFranBibliotek(sel) {
+  var opt = sel.options[sel.selectedIndex];
+  var markeEl  = document.getElementById('marke');
+  var modellEl = document.getElementById('modell');
+  var arEl     = document.getElementById('arsmodell');
+
+  if (!sel.value || sel.value === 'manuell') {
+    markeEl.readOnly = false; modellEl.readOnly = false; arEl.readOnly = false;
+    if (sel.value === 'manuell') {
+      markeEl.value = ''; modellEl.value = ''; arEl.value = '';
+    }
+    resetIntervall({});
+    return;
+  }
+
+  // Fyll i från bibliotek
+  markeEl.value = opt.dataset.marke;
+  modellEl.value = opt.dataset.modell;
+  arEl.value = opt.dataset.ar || '';
+  markeEl.readOnly = true; modellEl.readOnly = true; arEl.readOnly = true;
+
+  // Parsa intervall-strängen: "typ:km:aktiv|typ:km:aktiv"
+  var ivData = {};
+  var egna = [];
+  if (opt.dataset.intervall) {
+    opt.dataset.intervall.split('|').forEach(function(rad) {
+      var delar = rad.split(':');
+      if (delar.length === 3) {
+        var typ = delar[0], km = delar[1], aktiv = delar[2] === '1';
+        if (nedraknareTyper.indexOf(typ) >= 0) {
+          ivData[typ] = {km: km, aktiv: aktiv};
+        } else if (aktiv && km) {
+          egna.push({namn: typ, km: km});
+        }
+      }
+    });
+  }
+  resetIntervall(ivData);
+
+  // Fyll i egna servicetyper
+  var cont = document.getElementById('egnaTyper');
+  cont.innerHTML = '';
+  egna.forEach(function(e) {
+    var div = document.createElement('div');
+    div.className = 'intervall-rad egen-rad';
+    div.innerHTML = '<input class="form-input" type="text" name="egen_namn" value="' + e.namn + '" placeholder="Namn">' +
+      '<input class="form-input intervall-input" type="number" name="egen_km" value="' + e.km + '" placeholder="km">' +
+      '<button type="button" class="delete-btn" onclick="this.parentNode.remove()">✕</button>';
+    cont.appendChild(div);
+  });
+}
+
+function resetIntervall(data) {
+  nedraknareTyper.forEach(function(t) {
+    var cb  = document.getElementById('aktiv_' + t);
+    var inp = document.getElementById('iv_' + t);
+    if (data[t] !== undefined) {
+      cb.checked = data[t].aktiv;
+      inp.value  = data[t].km || '';
+      inp.disabled = !data[t].aktiv;
+    } else {
+      cb.checked = true;
+      inp.value  = '';
+      inp.disabled = false;
+    }
+  });
+}
+
+function toggleIv(t) {
+  var cb  = document.getElementById('aktiv_' + t);
+  var inp = document.getElementById('iv_' + t);
+  inp.disabled = !cb.checked;
+}
+
+function laggTillEgen() {
+  var cont = document.getElementById('egnaTyper');
+  var div = document.createElement('div');
+  div.className = 'intervall-rad egen-rad';
+  div.innerHTML = '<input class="form-input" type="text" name="egen_namn" placeholder="Namn, t.ex. Luftfjädring">' +
+    '<input class="form-input intervall-input" type="number" name="egen_km" placeholder="km">' +
+    '<button type="button" class="delete-btn" onclick="this.parentNode.remove()">✕</button>';
+  cont.appendChild(div);
+}
+</script>
+{% endblock %}

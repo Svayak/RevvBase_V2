@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8">
+  <title>Servicehistorik – {{ bil.regnr }}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; font-size: 11pt; color: #000; background: #fff; padding: 20mm; }
+    h1 { font-size: 20pt; margin-bottom: 6px; }
+    .meta { font-size: 10pt; color: #444; margin-bottom: 20px; border-bottom: 1px solid #ccc; padding-bottom: 10px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th { background: #f0f0f0; border: 1px solid #ccc; padding: 6px 8px; text-align: left; font-size: 9pt; }
+    td { border: 1px solid #ccc; padding: 6px 8px; font-size: 9pt; vertical-align: top; }
+    tr:nth-child(even) td { background: #fafafa; }
+    .badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 8pt; font-weight: bold; }
+    .badge-service { background: #d4f0dc; color: #1a5c2e; }
+    .badge-fel { background: #f0d4d4; color: #5c1a1a; }
+    .footer { margin-top: 16px; font-size: 8pt; color: #888; }
+    @media print { body { padding: 0; } }
+  </style>
+</head>
+<body>
+  <h1>Servicehistorik</h1>
+  <div class="meta">
+    <strong>Reg.nr:</strong> {{ bil.regnr }} &nbsp;·&nbsp;
+    <strong>Modell:</strong> {{ bil.marke }} {{ bil.modell }}
+    {% if bil.arsmodell %}&nbsp;·&nbsp;<strong>Årsmodell:</strong> {{ bil.arsmodell }}{% endif %}
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Datum</th>
+        <th>Km</th>
+        <th>Typ</th>
+        <th>Åtgärder / Beskrivning</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for h in handelser if h.typ != "miltal" %}
+      <tr>
+        <td>{{ h.datum }}</td>
+        <td>{{ h.km }}</td>
+        <td><span class="badge badge-{{ h.typ }}">{{ "SERVICE" if h.typ == "service" else "FEL" }}</span></td>
+        <td>
+          {% if h.service_typer %}
+          <span id="st-{{ h.id }}"></span>
+          <script>
+            (function(){
+              var raw = {{ h.service_typer | safe }};
+              document.getElementById('st-{{ h.id }}').textContent = raw.join(', ');
+            })();
+          </script>
+          {% endif %}
+          {% if h.beskrivning %}{% if h.service_typer %}<br>{% endif %}{{ h.beskrivning }}{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="footer">Totalt {{ handelser | length }} händelser · Utskriven {{ today }}</div>
+
+  <script>window.onload = function(){ window.print(); }</script>
+</body>
+</html>
