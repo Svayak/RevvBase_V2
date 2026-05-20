@@ -1,13 +1,21 @@
 with open('app.py', 'r', encoding='utf-8') as f:
     content = f.read()
 
-route = """
+# Ta bort den felaktiga landing-routen vi lade till
+content = content.replace("""
 @app.route('/')
 def landing():
     return open('landing.html', encoding='utf-8').read()
 
-"""
+# ── ROUTES ──""", "# ── ROUTES ──")
 
+# Lägg till rätt route med ett unikt namn
+route = """
+@app.route('/landing')
+def landing():
+    return open('landing.html', encoding='utf-8').read()
+
+"""
 content = content.replace("# ── ROUTES ──", route + "# ── ROUTES ──")
 
 with open('app.py', 'w', encoding='utf-8') as f:

@@ -325,7 +325,7 @@ def daglig_backup():
         time.sleep(3600)
 
 
-@app.route('/')
+@app.route('/landing')
 def landing():
     return open('landing.html', encoding='utf-8').read()
 
