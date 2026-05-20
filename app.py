@@ -224,6 +224,9 @@ def init_db():
         try:
             conn.execute("ALTER TABLE anvandare ADD COLUMN verkstad_id INTEGER")
         except: pass
+        try:
+            conn.execute("ALTER TABLE bilar ADD COLUMN verkstad_id INTEGER")
+        except: pass
 
 def get_fordonsmodell_intervall(marke, modell, arsmodell):
     """Hämtar intervall från fordonsbiblioteket för given märke+modell+år."""
