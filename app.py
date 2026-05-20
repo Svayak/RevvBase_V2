@@ -324,11 +324,6 @@ def daglig_backup():
         # Vänta 1 timme och kolla igen
         time.sleep(3600)
 
-
-@app.route('/landing')
-def landing():
-    return open('landing.html', encoding='utf-8').read()
-
 # ── ROUTES ──────────────────────────────────────────────────────────────────
 
 
