@@ -331,7 +331,15 @@ def landing():
 
 # ── ROUTES ──────────────────────────────────────────────────────────────────
 
+
 @app.route("/")
+def landing():
+    from flask_login import current_user
+    if current_user.is_authenticated:
+        return redirect(url_for("index"))
+    return open('landing.html', encoding='utf-8').read()
+
+@app.route("/dashboard")
 @login_required
 def index():
     q = request.args.get("q", "").strip()

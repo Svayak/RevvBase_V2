@@ -1,22 +1,30 @@
 with open('app.py', 'r', encoding='utf-8') as f:
     content = f.read()
 
-# Ta bort den felaktiga landing-routen vi lade till
-content = content.replace("""
-@app.route('/')
-def landing():
-    return open('landing.html', encoding='utf-8').read()
+# 1. Gör landningssidan till startsidan
+old_index = """@app.route("/")
+@login_required
+def index():"""
 
-# ── ROUTES ──""", "# ── ROUTES ──")
+new_index = """@app.route("/landing_old")
+@login_required
+def index():"""
 
-# Lägg till rätt route med ett unikt namn
-route = """
-@app.route('/landing')
+# 2. Lägg till landningssida som startsida
+landing_route = """
+@app.route("/")
 def landing():
+    from flask_login import current_user
+    if current_user.is_authenticated:
+        return redirect(url_for("index"))
     return open('landing.html', encoding='utf-8').read()
 
 """
-content = content.replace("# ── ROUTES ──", route + "# ── ROUTES ──")
+
+content = content.replace(old_index, landing_route + old_index.replace('"/>"', '"/"').replace('@app.route("/")', '@app.route("/dashboard")'))
+
+# Fixa index-routen till /dashboard
+content = content.replace('@app.route("/landing_old")\n@login_required\ndef index():', '@app.route("/dashboard")\n@login_required\ndef index():')
 
 with open('app.py', 'w', encoding='utf-8') as f:
     f.write(content)
