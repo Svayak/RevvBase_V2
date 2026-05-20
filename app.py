@@ -26,7 +26,7 @@ else:
         _f.write(_new_key)
     app.secret_key = _new_key
 
-DB = os.path.join(os.path.dirname(__file__), "verkstad.db")
+DB = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "verkstad.db"))
 
 csrf = CSRFProtect(app)
 login_manager = LoginManager()
