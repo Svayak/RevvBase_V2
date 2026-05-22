@@ -13,7 +13,7 @@
     .nav-right{display:flex;align-items:center;gap:1rem}
     .live{color:#4cd97a;font-size:.85rem;font-weight:600}
     .btn-logout{background:transparent;color:#7a8490;border:1px solid #2e3338;border-radius:6px;padding:.35rem .9rem;font-size:.85rem;cursor:pointer;text-decoration:none}
-    .main{max-width:1100px;margin:0 auto;padding:2rem 1.5rem}
+    .main{max-width:1200px;margin:0 auto;padding:2rem 1.5rem}
     .stats{display:grid;grid-template-columns:repeat(6,1fr);gap:1rem;margin-bottom:2rem}
     .stat-card{background:#181b1e;border:1px solid #2e3338;border-radius:8px;padding:1.2rem;text-align:center}
     .stat-label{font-size:.72rem;color:#7a8490;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.5rem}
@@ -27,21 +27,24 @@
     .btn-primary:hover{background:#ffbb33}
     .table-wrap{background:#181b1e;border:1px solid #2e3338;border-radius:10px;overflow:hidden}
     table{width:100%;border-collapse:collapse}
-    th{background:#22262b;font-size:.75rem;color:#7a8490;text-transform:uppercase;letter-spacing:.06em;padding:.75rem 1rem;text-align:left}
-    td{padding:.85rem 1rem;border-top:1px solid #2e3338;font-size:.88rem;vertical-align:middle}
+    th{background:#22262b;font-size:.72rem;color:#7a8490;text-transform:uppercase;letter-spacing:.06em;padding:.75rem 1rem;text-align:left}
+    td{padding:.85rem 1rem;border-top:1px solid #2e3338;font-size:.85rem;vertical-align:middle}
     .verkstad-namn{font-weight:700;color:#e8eaec}
-    .verkstad-slug{font-size:.78rem;color:#7a8490;margin-top:2px}
+    .verkstad-slug{font-size:.75rem;color:#7a8490;margin-top:2px}
     .badge{display:inline-block;padding:.2rem .6rem;border-radius:20px;font-size:.72rem;font-weight:700;text-transform:uppercase}
     .badge-bas{background:#1a3a5c;color:#88bbdd}
     .badge-standard{background:#3d2a00;color:#f0a500}
     .badge-pro{background:#1a3a1a;color:#4cd97a}
     .badge-aktiv{background:#0d2b1a;color:#4cd97a}
     .badge-pausad{background:#2b1a00;color:#f0c040}
-    .btn-sm{padding:.3rem .75rem;border-radius:5px;font-size:.78rem;font-weight:600;cursor:pointer;border:none}
+    .btn-sm{padding:.3rem .75rem;border-radius:5px;font-size:.75rem;font-weight:600;cursor:pointer;border:none}
     .btn-edit{background:#22262b;color:#e8eaec;border:1px solid #2e3338}
+    .btn-edit:hover{border-color:#f0a500;color:#f0a500}
     .btn-pause{background:#3d2a00;color:#f0a500;border:1px solid #5c3d00}
     .btn-unpause{background:#0d2b1a;color:#4cd97a;border:1px solid #1a4d2b}
     .btn-danger{background:#2b0d0d;color:#e05050;border:1px solid #4d1a1a}
+    .last-login{font-size:.75rem;color:#7a8490}
+    .last-login.recent{color:#4cd97a}
     .modal-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:100;align-items:center;justify-content:center}
     .modal-overlay.active{display:flex}
     .modal{background:#181b1e;border:1px solid #2e3338;border-radius:10px;padding:2rem;width:100%;max-width:460px}
@@ -71,14 +74,14 @@
     <div class="stat-card"><div class="stat-label">Totalt kunder</div><div class="stat-value gold">{{ totalt }}</div></div>
     <div class="stat-card"><div class="stat-label">Aktiva</div><div class="stat-value green">{{ aktiva }}</div></div>
     <div class="stat-card"><div class="stat-label">Pausade</div><div class="stat-value yellow">{{ pausade }}</div></div>
-    <div class="stat-card"><div class="stat-label">Bas-paket</div><div class="stat-value gold">{{ bas }}</div></div>
+    <div class="stat-card"><div class="stat-label">Bas</div><div class="stat-value gold">{{ bas }}</div></div>
     <div class="stat-card"><div class="stat-label">Standard</div><div class="stat-value gold">{{ standard }}</div></div>
     <div class="stat-card"><div class="stat-label">Pro</div><div class="stat-value gold">{{ pro }}</div></div>
   </div>
 
   <div class="section-header">
     <div class="section-title">Kundkonton</div>
-    <button class="btn-primary" onclick="document.getElementById('nyModal').classList.add('active')">+ Lägg till kund</button>
+    <button class="btn-primary" onclick="oppnaModal('nyModal')">+ Lägg till kund</button>
   </div>
 
   <div class="table-wrap">
@@ -90,6 +93,7 @@
           <th>Paket</th>
           <th>Status</th>
           <th>Skapad</th>
+          <th>Senaste inloggning</th>
           <th>Användare</th>
           <th>Fordon</th>
           <th></th>
@@ -102,33 +106,42 @@
             <div class="verkstad-namn">{{ v.namn }}</div>
             <div class="verkstad-slug">revvbase.se/{{ v.slug }}</div>
           </td>
-          <td>{{ v.admin_email }}</td>
+          <td style="font-size:.82rem;">{{ v.admin_email }}</td>
           <td><span class="badge badge-{{ v.paket }}">{{ v.paket }}</span></td>
           <td><span class="badge badge-{{ v.status }}">{{ v.status }}</span></td>
-          <td>{{ v.skapad }}</td>
+          <td style="font-size:.8rem;color:#7a8490">{{ v.skapad }}</td>
+          <td>
+            {% if v.senaste_inloggning %}
+              <span class="last-login">{{ v.senaste_inloggning }}</span>
+            {% else %}
+              <span class="last-login">Aldrig</span>
+            {% endif %}
+          </td>
           <td>{{ v.antal_anvandare }}</td>
           <td>{{ v.antal_bilar }}</td>
-          <td style="display:flex;gap:.4rem;flex-wrap:wrap">
-            <form method="post" action="/superadmin/pausa/{{ v.id }}">
+          <td style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;">
+            <button class="btn-sm btn-edit" onclick="oppnaRedigera({{ v.id }}, '{{ v.namn }}', '{{ v.slug }}', '{{ v.admin_email }}', '{{ v.paket }}')">Redigera</button>
+            <form method="post" action="/superadmin/pausa/{{ v.id }}" style="display:inline">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button type="submit" class="btn-sm {% if v.status == 'aktiv' %}btn-pause{% else %}btn-unpause{% endif %}">
                 {% if v.status == "aktiv" %}Pausa{% else %}Aktivera{% endif %}
               </button>
             </form>
-            <form method="post" action="/superadmin/ta-bort/{{ v.id }}" onsubmit="return confirm('Ta bort {{ v.namn }}?')">
+            <form method="post" action="/superadmin/ta-bort/{{ v.id }}" onsubmit="return confirm('Ta bort {{ v.namn }}?')" style="display:inline">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button type="submit" class="btn-sm btn-danger">Ta bort</button>
             </form>
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="8" style="text-align:center;color:#7a8490;padding:2rem">Inga kunder ännu — lägg till din första!</td></tr>
+        <tr><td colspan="9" style="text-align:center;color:#7a8490;padding:2rem">Inga kunder ännu — lägg till din första!</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
 </div>
 
+<!-- Ny kund modal -->
 <div class="modal-overlay" id="nyModal">
   <div class="modal">
     <h2>Lägg till ny kund</h2>
@@ -156,18 +169,77 @@
         <div class="form-group">
           <label class="form-label">Paket</label>
           <select class="form-input" name="paket">
-            <option value="bas">Bas</option>
-            <option value="standard">Standard</option>
-            <option value="pro">Pro</option>
+            <option value="bas">Bas (25 fordon, 1 användare)</option>
+            <option value="standard">Standard (100 fordon, 5 användare)</option>
+            <option value="pro">Pro (obegränsat)</option>
           </select>
         </div>
       </div>
       <div class="modal-btns">
-        <button type="button" class="btn-ghost" onclick="document.getElementById('nyModal').classList.remove('active')">Avbryt</button>
+        <button type="button" class="btn-ghost" onclick="stangModal('nyModal')">Avbryt</button>
         <button type="submit" class="btn-primary">Skapa kund</button>
       </div>
     </form>
   </div>
 </div>
+
+<!-- Redigera kund modal -->
+<div class="modal-overlay" id="redigeraModal">
+  <div class="modal">
+    <h2>Redigera kund</h2>
+    <form method="post" id="redigeraForm" action="/superadmin/redigera/0">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Verkstadsnamn *</label>
+          <input class="form-input" type="text" name="namn" id="r_namn" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Slug (URL) *</label>
+          <input class="form-input" type="text" name="slug" id="r_slug" required>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Admin-e-post *</label>
+        <input class="form-input" type="email" name="email" id="r_email" required>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Paket</label>
+        <select class="form-input" name="paket" id="r_paket">
+          <option value="bas">Bas (25 fordon, 1 användare)</option>
+          <option value="standard">Standard (100 fordon, 5 användare)</option>
+          <option value="pro">Pro (obegränsat)</option>
+        </select>
+      </div>
+      <div class="modal-btns">
+        <button type="button" class="btn-ghost" onclick="stangModal('redigeraModal')">Avbryt</button>
+        <button type="submit" class="btn-primary">Spara ändringar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+function oppnaModal(id) {
+  document.getElementById(id).classList.add('active');
+}
+function stangModal(id) {
+  document.getElementById(id).classList.remove('active');
+}
+function oppnaRedigera(vid, namn, slug, email, paket) {
+  document.getElementById('r_namn').value = namn;
+  document.getElementById('r_slug').value = slug;
+  document.getElementById('r_email').value = email;
+  document.getElementById('r_paket').value = paket;
+  document.getElementById('redigeraForm').action = '/superadmin/redigera/' + vid;
+  oppnaModal('redigeraModal');
+}
+// Stäng modal vid klick utanför
+document.querySelectorAll('.modal-overlay').forEach(function(el) {
+  el.addEventListener('click', function(e) {
+    if (e.target === el) el.classList.remove('active');
+  });
+});
+</script>
 </body>
 </html>

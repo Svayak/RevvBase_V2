@@ -251,6 +251,9 @@ def init_db():
         try:
             conn.execute("ALTER TABLE bilar ADD COLUMN verkstad_id INTEGER")
         except: pass
+        try:
+            conn.execute("ALTER TABLE anvandare ADD COLUMN senaste_inloggning TEXT")
+        except: pass
 
 def get_fordonsmodell_intervall(marke, modell, arsmodell):
     with get_db() as conn:
@@ -448,6 +451,16 @@ def ny_bil():
 
         if not regnr or not marke or not modell:
             error = "Reg.nr, märke och modell är obligatoriska."
+        elif current_user.verkstad_id is not None:
+            # Kontrollera fordonskvot
+            PAKET_FORDON = {"bas": 25, "standard": 100, "pro": 9999}
+            with get_db() as conn:
+                v = conn.execute("SELECT paket FROM verkstader WHERE id=?", (current_user.verkstad_id,)).fetchone()
+                paket = v["paket"] if v else "bas"
+                antal = conn.execute("SELECT COUNT(*) FROM bilar WHERE verkstad_id=?", (current_user.verkstad_id,)).fetchone()[0]
+            max_fordon = PAKET_FORDON.get(paket, 25)
+            if antal >= max_fordon:
+                error = f"Paketet {paket.capitalize()} tillåter max {max_fordon} fordon. Uppgradera för att lägga till fler."
         else:
             try:
                 vid = current_user.verkstad_id
@@ -1045,6 +1058,10 @@ def login():
                 with get_db() as conn2:
                     v = conn2.execute("SELECT slug FROM verkstader WHERE id=?", (row["verkstad_id"],)).fetchone()
                     slug = v["slug"] if v else None
+            # Uppdatera senaste inloggning
+            with get_db() as conn2:
+                conn2.execute("UPDATE anvandare SET senaste_inloggning=? WHERE id=?",
+                    (datetime.now().strftime("%Y-%m-%d %H:%M"), row["id"]))
             user = User(row["id"], row["username"], row["namn"], row["roll"], row["verkstad_id"], slug)
             session.permanent = True
             login_user(user, remember=False)
@@ -1209,7 +1226,8 @@ def superadmin():
         verkstader = conn.execute("""
             SELECT v.*,
                 COUNT(DISTINCT a.id) as antal_anvandare,
-                COUNT(DISTINCT b.id) as antal_bilar
+                COUNT(DISTINCT b.id) as antal_bilar,
+                MAX(a.senaste_inloggning) as senaste_inloggning
             FROM verkstader v
             LEFT JOIN anvandare a ON a.verkstad_id = v.id
             LEFT JOIN bilar b ON b.verkstad_id = v.id
@@ -1268,6 +1286,22 @@ def superadmin_ta_bort(vid):
     with get_db() as conn:
         conn.execute("DELETE FROM anvandare WHERE verkstad_id=?", (vid,))
         conn.execute("DELETE FROM verkstader WHERE id=?", (vid,))
+    return redirect(url_for("superadmin"))
+
+@app.route("/superadmin/redigera/<int:vid>", methods=["POST"])
+def superadmin_redigera(vid):
+    if not session.get("superadmin"):
+        return redirect(url_for("superadmin_login"))
+    namn  = request.form.get("namn","").strip()
+    slug  = request.form.get("slug","").strip().lower().replace(" ","-")
+    email = request.form.get("email","").strip().lower()
+    paket = request.form.get("paket","bas")
+    if namn and slug and email:
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE verkstader SET namn=?, slug=?, admin_email=?, paket=? WHERE id=?",
+                (namn, slug, email, paket, vid)
+            )
     return redirect(url_for("superadmin"))
 
 @app.route("/superadmin/logout")
