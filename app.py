@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, session
+from flask import Flask, render_template, request, redirect, url_for, session, abort
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -7,13 +7,11 @@ from datetime import date, datetime
 from collections import defaultdict
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024  # Max 2MB upload
-app.config["PERMANENT_SESSION_LIFETIME"] = 8 * 60 * 60  # 8 timmar
-app.config["SESSION_COOKIE_HTTPONLY"] = True   # JS kan inte läsa session-cookie
-app.config["SESSION_COOKIE_SAMESITE"] = "Lax"  # CSRF-skydd
-# SESSION_COOKIE_SECURE=True aktiveras automatiskt när HTTPS används
+app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
+app.config["PERMANENT_SESSION_LIFETIME"] = 8 * 60 * 60
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
-# Secret key: läs från fil eller miljövariabel för att överleva omstarter
 _KEY_FILE = os.path.join(os.path.dirname(__file__), ".secret_key")
 if os.environ.get("SECRET_KEY"):
     app.secret_key = os.environ.get("SECRET_KEY")
@@ -31,60 +29,64 @@ DB = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "verkstad
 csrf = CSRFProtect(app)
 login_manager = LoginManager()
 
-# Brute-force skydd: { ip: [timestamp, timestamp, ...] }
+# ── BRUTE-FORCE SKYDD ────────────────────────────────────────────────────────
 _login_attempts = defaultdict(list)
+_sa_login_attempts = defaultdict(list)
 MAX_ATTEMPTS = 5
-LOCKOUT_SECONDS = 15 * 60  # 15 minuter
+LOCKOUT_SECONDS = 15 * 60
 
-def check_rate_limit(ip):
-    """Returnerar (blockerad, sekunder_kvar). Rensar gamla försök."""
+def check_rate_limit(ip, store=None):
+    if store is None:
+        store = _login_attempts
     nu = time.time()
-    _login_attempts[ip] = [t for t in _login_attempts[ip] if nu - t < LOCKOUT_SECONDS]
-    if len(_login_attempts[ip]) >= MAX_ATTEMPTS:
-        kvar = int(LOCKOUT_SECONDS - (nu - _login_attempts[ip][0]))
+    store[ip] = [t for t in store[ip] if nu - t < LOCKOUT_SECONDS]
+    if len(store[ip]) >= MAX_ATTEMPTS:
+        kvar = int(LOCKOUT_SECONDS - (nu - store[ip][0]))
         return True, kvar
     return False, 0
 
-def registrera_misslyckat(ip):
-    _login_attempts[ip].append(time.time())
+def registrera_misslyckat(ip, store=None):
+    if store is None:
+        store = _login_attempts
+    store[ip].append(time.time())
 
-def rensa_forsok(ip):
-    _login_attempts.pop(ip, None)
+def rensa_forsok(ip, store=None):
+    if store is None:
+        store = _login_attempts
+    store.pop(ip, None)
+
+# ── LOGIN MANAGER ─────────────────────────────────────────────────────────────
 login_manager.init_app(app)
 login_manager.login_view = "login"
 login_manager.login_message = "Logga in för att fortsätta."
 
 class User(UserMixin):
-    def __init__(self, id, username, namn, roll):
+    def __init__(self, id, username, namn, roll, verkstad_id):
         self.id = id
         self.username = username
         self.namn = namn
         self.roll = roll
+        self.verkstad_id = verkstad_id  # None = superadmin/global admin
 
 @login_manager.user_loader
 def load_user(user_id):
     with get_db() as conn:
         row = conn.execute("SELECT * FROM anvandare WHERE id=?", (user_id,)).fetchone()
     if row:
-        return User(row["id"], row["username"], row["namn"], row["roll"])
+        return User(row["id"], row["username"], row["namn"], row["roll"], row["verkstad_id"])
     return None
+
+# ── HJÄLPFUNKTIONER ───────────────────────────────────────────────────────────
 BACKUP_DIR = os.path.join(os.path.dirname(__file__), "säkerhetskopior")
 
 SERVICE_TYPER = [
-    "Oljebyte",
-    "Kamrem",
-    "Bromsklossar fram",
-    "Bromsklossar bak",
-    "Bromsskivor fram",
-    "Bromsskivor bak",
-    "Luftfilter",
-    "Kylvätska",
-    "Tändstift",
-    "Drivrem",
-    "Däckbyte",
-    "Bromsvätska",
-    "Pollenfilter",
-    "Växellådsolja",
+    "Oljebyte", "Kamrem",
+    "Bromsklossar fram", "Bromsklossar bak",
+    "Bromsskivor fram", "Bromsskivor bak",
+    "Luftfilter", "Kylvätska",
+    "Tändstift", "Drivrem",
+    "Däckbyte", "Bromsvätska",
+    "Pollenfilter", "Växellådsolja",
 ]
 
 NEDRAKNARE_TYPER = [
@@ -94,7 +96,6 @@ NEDRAKNARE_TYPER = [
     "Luftfilter", "Kylvätska",
 ]
 
-# Standardintervall i km (används som fallback när fordonsbiblioteket saknar data)
 STANDARD_INTERVALL = {
     "Ford Transit": {
         "Oljebyte": 15000, "Kamrem": 100000,
@@ -126,6 +127,17 @@ def get_db():
     conn = sqlite3.connect(DB)
     conn.row_factory = sqlite3.Row
     return conn
+
+def check_bil_access(bil_id):
+    """Hämtar bil och kontrollerar att den tillhör inloggad verkstad. Returnerar bil-raden eller anropar abort(403)."""
+    with get_db() as conn:
+        b = conn.execute("SELECT * FROM bilar WHERE id=?", (bil_id,)).fetchone()
+    if not b:
+        abort(404)
+    # Admins utan verkstad_id (gamla konton) får se allt
+    if current_user.verkstad_id is not None and b["verkstad_id"] != current_user.verkstad_id:
+        abort(403)
+    return b
 
 def init_db():
     with get_db() as conn:
@@ -168,7 +180,6 @@ def init_db():
                 roll TEXT NOT NULL DEFAULT 'anställd'
             );
         """)
-        # Lägg till skapad_av i handelser om saknas
         try:
             conn.execute("ALTER TABLE handelser ADD COLUMN skapad_av TEXT")
         except: pass
@@ -190,16 +201,12 @@ def init_db():
                 FOREIGN KEY (fordonsmodell_id) REFERENCES fordonsmodeller(id)
             );
         """)
-        # Migrera miltal -> km om kolumnen heter miltal
         try:
             conn.execute("ALTER TABLE handelser RENAME COLUMN miltal TO km")
-        except:
-            pass
-        # Migrera bilar: lägg till fordonsnummer om saknas
+        except: pass
         try:
             conn.execute("ALTER TABLE bilar ADD COLUMN fordonsnummer TEXT")
-        except:
-            pass
+        except: pass
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS kommentarer (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -209,8 +216,6 @@ def init_db():
                 datum TEXT NOT NULL,
                 FOREIGN KEY (bil_id) REFERENCES bilar(id)
             );
-        """)
-        conn.executescript("""
             CREATE TABLE IF NOT EXISTS verkstader (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 namn TEXT NOT NULL,
@@ -229,7 +234,6 @@ def init_db():
         except: pass
 
 def get_fordonsmodell_intervall(marke, modell, arsmodell):
-    """Hämtar intervall från fordonsbiblioteket för given märke+modell+år."""
     with get_db() as conn:
         fm = conn.execute(
             "SELECT id FROM fordonsmodeller WHERE marke=? AND modell=? AND (arsmodell=? OR arsmodell IS NULL) ORDER BY arsmodell DESC LIMIT 1",
@@ -244,9 +248,7 @@ def get_fordonsmodell_intervall(marke, modell, arsmodell):
     return {r["service_typ"]: {"intervall": r["intervall_km"], "aktiv": bool(r["aktiv"])} for r in rader}
 
 def get_intervall(bil_id, marke, modell, arsmodell=None):
-    """Hämtar intervall för bil - från DB om satta, annars fordonsbibliotek, annars hårdkodad standard. Inkluderar egna servicetyper."""
     nyckel = f"{marke} {modell}"
-    # Försök hämta från fordonsbibliotek först
     fm_intervall = get_fordonsmodell_intervall(marke, modell, arsmodell)
     standard = fm_intervall if fm_intervall else STANDARD_INTERVALL.get(nyckel, {})
     with get_db() as conn:
@@ -255,16 +257,14 @@ def get_intervall(bil_id, marke, modell, arsmodell=None):
         ).fetchall()
     result = {}
     db_map = {r["service_typ"]: r for r in rader}
-    # Standard nedräknare
     for t in NEDRAKNARE_TYPER:
         if t in db_map:
             r = db_map[t]
             result[t] = {"intervall": r["intervall_km"], "aktiv": bool(r["aktiv"]), "egen": False}
         elif rader:
-            pass  # Inte i DB = inte satt
+            pass
         elif t in standard:
             result[t] = {"intervall": standard[t], "aktiv": standard[t] is not None, "egen": False}
-    # Egna servicetyper (de som inte finns i NEDRAKNARE_TYPER)
     for r in rader:
         if r["service_typ"] not in NEDRAKNARE_TYPER and bool(r["aktiv"]):
             result[r["service_typ"]] = {"intervall": r["intervall_km"], "aktiv": True, "egen": True}
@@ -272,7 +272,6 @@ def get_intervall(bil_id, marke, modell, arsmodell=None):
 
 def spara_intervall(bil_id, intervall_dict):
     with get_db() as conn:
-        # Ta bort egna typer som inte längre finns med
         egna_nya = [t for t, v in intervall_dict.items() if v.get("egen")]
         befintliga_egna = conn.execute(
             "SELECT service_typ FROM serviceintervall WHERE bil_id=? AND service_typ NOT IN ({})".format(
@@ -306,7 +305,6 @@ def bygg_panel(bil_id, marke, modell, handelser, senaste_km, arsmodell=None):
             diff = (senaste_km - senaste_per_typ[t]) if senaste_km is not None else None
             aldrig_gjort = False
         else:
-            # Aldrig loggat — anta gjort vid 0 km (fabriksny)
             diff = senaste_km if senaste_km is not None else None
             aldrig_gjort = True
         panel[t] = {"diff": diff, "intervall": iv, "aldrig_gjort": aldrig_gjort}
@@ -315,14 +313,12 @@ def bygg_panel(bil_id, marke, modell, handelser, senaste_km, arsmodell=None):
 def daglig_backup():
     while True:
         nu = datetime.now()
-        # Kör backup en gång per dag
         idag = nu.strftime("%Y-%m-%d")
         os.makedirs(BACKUP_DIR, exist_ok=True)
         fil = os.path.join(BACKUP_DIR, f"{idag}.csv")
         if not os.path.exists(fil):
             try:
                 with get_db() as conn:
-                    bilar = conn.execute("SELECT * FROM bilar").fetchall()
                     handelser = conn.execute(
                         "SELECT h.*, b.regnr, b.fordonsnummer, b.marke, b.modell FROM handelser h JOIN bilar b ON h.bil_id=b.id"
                     ).fetchall()
@@ -338,15 +334,12 @@ def daglig_backup():
                         ])
             except Exception as e:
                 print(f"Backup fel: {e}")
-        # Vänta 1 timme och kolla igen
         time.sleep(3600)
 
-# ── ROUTES ──────────────────────────────────────────────────────────────────
-
+# ── ROUTES ───────────────────────────────────────────────────────────────────
 
 @app.route("/")
 def landing():
-    from flask_login import current_user
     if current_user.is_authenticated:
         return redirect(url_for("index"))
     return open('landing.html', encoding='utf-8').read()
@@ -355,14 +348,22 @@ def landing():
 @login_required
 def index():
     q = request.args.get("q", "").strip()
+    vid = current_user.verkstad_id
     with get_db() as conn:
+        base = "SELECT * FROM bilar WHERE verkstad_id=?" if vid is not None else "SELECT * FROM bilar WHERE 1=1"
+        params_base = [vid] if vid is not None else []
         if q:
             bilar = conn.execute(
-                "SELECT * FROM bilar WHERE regnr LIKE ? OR marke LIKE ? OR modell LIKE ? OR fordonsnummer LIKE ? OR notering LIKE ? ORDER BY regnr",
-                (f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%")
+                base.replace("WHERE", "WHERE (regnr LIKE ? OR marke LIKE ? OR modell LIKE ? OR fordonsnummer LIKE ? OR notering LIKE ?) AND" if vid is not None
+                     else "WHERE (regnr LIKE ? OR marke LIKE ? OR modell LIKE ? OR fordonsnummer LIKE ? OR notering LIKE ?)") + " ORDER BY regnr",
+                ([f"%{q}%"]*5 + params_base) if vid is not None else [f"%{q}%"]*5
             ).fetchall()
         else:
-            bilar = conn.execute("SELECT * FROM bilar ORDER BY fordonsnummer, regnr").fetchall()
+            bilar = conn.execute(
+                ("SELECT * FROM bilar WHERE verkstad_id=? ORDER BY fordonsnummer, regnr" if vid is not None
+                 else "SELECT * FROM bilar ORDER BY fordonsnummer, regnr"),
+                params_base
+            ).fetchall()
     return render_template("index.html", bilar=bilar, q=q)
 
 @app.route("/bil/ny", methods=["GET","POST"])
@@ -375,32 +376,31 @@ def ny_bil():
         ).fetchall()
 
     if request.method == "POST":
-        regnr        = request.form.get("regnr","").strip().upper()
-        fordonsnummer= request.form.get("fordonsnummer","").strip()
-        marke        = request.form.get("marke","").strip()
-        modell       = request.form.get("modell","").strip()
-        arsmodell    = request.form.get("arsmodell","").strip()
-        notering     = request.form.get("notering","").strip()
+        regnr         = request.form.get("regnr","").strip().upper()
+        fordonsnummer = request.form.get("fordonsnummer","").strip()
+        marke         = request.form.get("marke","").strip()
+        modell        = request.form.get("modell","").strip()
+        arsmodell     = request.form.get("arsmodell","").strip()
+        notering      = request.form.get("notering","").strip()
 
         if not regnr or not marke or not modell:
             error = "Reg.nr, märke och modell är obligatoriska."
         else:
             try:
+                vid = current_user.verkstad_id
                 with get_db() as conn:
                     cur = conn.execute(
-                        "INSERT INTO bilar (regnr,fordonsnummer,marke,modell,arsmodell,notering) VALUES (?,?,?,?,?,?)",
-                        (regnr, fordonsnummer or None, marke, modell, arsmodell or None, notering)
+                        "INSERT INTO bilar (regnr,fordonsnummer,marke,modell,arsmodell,notering,verkstad_id) VALUES (?,?,?,?,?,?,?)",
+                        (regnr, fordonsnummer or None, marke, modell, arsmodell or None, notering, vid)
                     )
                     bil_id = cur.lastrowid
 
-                # Spara intervall
                 iv_dict = {}
                 for t in NEDRAKNARE_TYPER:
                     aktiv = request.form.get(f"aktiv_{t}") == "1"
                     iv_str = request.form.get(f"iv_{t}", "").strip()
                     iv_km = int(iv_str) if iv_str.isdigit() else None
                     iv_dict[t] = {"intervall": iv_km, "aktiv": aktiv, "egen": False}
-                # Egna servicetyper
                 egna_namn = request.form.getlist("egen_namn")
                 egna_km   = request.form.getlist("egen_km")
                 for namn, km_str in zip(egna_namn, egna_km):
@@ -409,7 +409,6 @@ def ny_bil():
                         iv_dict[namn] = {"intervall": int(km_str), "aktiv": True, "egen": True}
                 spara_intervall(bil_id, iv_dict)
 
-                # Skapa fordonsprofil i biblioteket om den inte finns
                 ar = int(arsmodell) if arsmodell.isdigit() else None
                 with get_db() as conn:
                     befintlig = conn.execute(
@@ -439,11 +438,9 @@ def ny_bil():
 @app.route("/bil/<int:bil_id>")
 @login_required
 def bil(bil_id):
+    b = check_bil_access(bil_id)
     filter_typ = request.args.get("filter", "").strip()
     with get_db() as conn:
-        b = conn.execute("SELECT * FROM bilar WHERE id=?", (bil_id,)).fetchone()
-        if not b:
-            return redirect(url_for("index"))
         if filter_typ:
             handelser = conn.execute(
                 "SELECT * FROM handelser WHERE bil_id=? AND service_typer LIKE ? ORDER BY km DESC, datum DESC",
@@ -456,15 +453,12 @@ def bil(bil_id):
         alla_handelser = conn.execute(
             "SELECT * FROM handelser WHERE bil_id=? ORDER BY km DESC", (bil_id,)
         ).fetchall()
-
-    senaste_km = alla_handelser[0]["km"] if alla_handelser else None
-    panel = bygg_panel(bil_id, b["marke"], b["modell"], alla_handelser, senaste_km)
-
-    with get_db() as conn:
         kommentarer = conn.execute(
             "SELECT * FROM kommentarer WHERE bil_id=? ORDER BY id DESC", (bil_id,)
         ).fetchall()
 
+    senaste_km = alla_handelser[0]["km"] if alla_handelser else None
+    panel = bygg_panel(bil_id, b["marke"], b["modell"], alla_handelser, senaste_km)
     return render_template("bil.html", bil=b, handelser=handelser,
         panel=panel, senaste_km=senaste_km,
         service_typer=SERVICE_TYPER, filter_typ=filter_typ,
@@ -473,16 +467,15 @@ def bil(bil_id):
 @app.route("/bil/<int:bil_id>/redigera", methods=["GET","POST"])
 @login_required
 def redigera_bil(bil_id):
-    with get_db() as conn:
-        b = conn.execute("SELECT * FROM bilar WHERE id=?", (bil_id,)).fetchone()
+    b = check_bil_access(bil_id)
     intervaller = get_intervall(bil_id, b["marke"], b["modell"])
     error = None
     if request.method == "POST":
-        marke        = request.form.get("marke","").strip()
-        modell       = request.form.get("modell","").strip()
-        fordonsnummer= request.form.get("fordonsnummer","").strip()
-        arsmodell    = request.form.get("arsmodell","").strip()
-        notering     = request.form.get("notering","").strip()
+        marke         = request.form.get("marke","").strip()
+        modell        = request.form.get("modell","").strip()
+        fordonsnummer = request.form.get("fordonsnummer","").strip()
+        arsmodell     = request.form.get("arsmodell","").strip()
+        notering      = request.form.get("notering","").strip()
         if not marke or not modell:
             error = "Märke och modell är obligatoriska."
         else:
@@ -491,14 +484,12 @@ def redigera_bil(bil_id):
                     "UPDATE bilar SET marke=?,modell=?,fordonsnummer=?,arsmodell=?,notering=? WHERE id=?",
                     (marke, modell, fordonsnummer or None, arsmodell or None, notering, bil_id)
                 )
-            # Uppdatera intervall
             iv_dict = {}
             for t in NEDRAKNARE_TYPER:
                 aktiv = request.form.get(f"aktiv_{t}") == "1"
                 iv_str = request.form.get(f"iv_{t}", "").strip()
                 iv_km = int(iv_str) if iv_str.isdigit() else None
                 iv_dict[t] = {"intervall": iv_km, "aktiv": aktiv, "egen": False}
-            # Egna servicetyper
             egna_namn = request.form.getlist("egen_namn")
             egna_km   = request.form.getlist("egen_km")
             for namn, km_str in zip(egna_namn, egna_km):
@@ -513,11 +504,7 @@ def redigera_bil(bil_id):
 @app.route("/bil/<int:bil_id>/ny-handelse", methods=["GET","POST"])
 @login_required
 def ny_handelse(bil_id):
-    with get_db() as conn:
-        b = conn.execute("SELECT * FROM bilar WHERE id=?", (bil_id,)).fetchone()
-    if not b:
-        return redirect(url_for("index"))
-    # Bygg komplett lista med servicetyper inkl. egna
+    b = check_bil_access(bil_id)
     intervaller = get_intervall(bil_id, b["marke"], b["modell"])
     egna_typer = [t for t in intervaller if t not in NEDRAKNARE_TYPER and intervaller[t].get("aktiv")]
     alla_service_typer = SERVICE_TYPER + [t for t in egna_typer if t not in SERVICE_TYPER]
@@ -541,7 +528,6 @@ def ny_handelse(bil_id):
                 error = "Välj typ av händelse."
                 return render_template("ny_handelse.html", bil=b, steg="2", km=km, error=error, service_typer=alla_service_typer)
             if typ == "miltal":
-                # Spara direkt utan steg 3
                 with get_db() as conn:
                     conn.execute(
                         "INSERT INTO handelser (bil_id,datum,km,typ,service_typer,beskrivning,skapad_av) VALUES (?,?,?,?,?,?,?)",
@@ -575,8 +561,8 @@ def ny_handelse(bil_id):
 @app.route("/bil/<int:bil_id>/redigera-handelse/<int:h_id>", methods=["GET","POST"])
 @login_required
 def redigera_handelse(bil_id, h_id):
+    b = check_bil_access(bil_id)
     with get_db() as conn:
-        b = conn.execute("SELECT * FROM bilar WHERE id=?", (bil_id,)).fetchone()
         h = conn.execute("SELECT * FROM handelser WHERE id=? AND bil_id=?", (h_id, bil_id)).fetchone()
     if not h:
         return redirect(url_for("bil", bil_id=bil_id))
@@ -606,6 +592,7 @@ def redigera_handelse(bil_id, h_id):
 @app.route("/bil/<int:bil_id>/ny-kommentar", methods=["POST"])
 @login_required
 def ny_kommentar(bil_id):
+    check_bil_access(bil_id)
     text = request.form.get("text", "").strip()
     if text:
         with get_db() as conn:
@@ -618,6 +605,7 @@ def ny_kommentar(bil_id):
 @app.route("/bil/<int:bil_id>/ta-bort-kommentar/<int:k_id>", methods=["POST"])
 @login_required
 def ta_bort_kommentar(bil_id, k_id):
+    check_bil_access(bil_id)
     with get_db() as conn:
         conn.execute("DELETE FROM kommentarer WHERE id=? AND bil_id=?", (k_id, bil_id))
     return redirect(url_for("bil", bil_id=bil_id))
@@ -625,6 +613,7 @@ def ta_bort_kommentar(bil_id, k_id):
 @app.route("/bil/<int:bil_id>/ta-bort-handelse/<int:h_id>", methods=["POST"])
 @login_required
 def ta_bort_handelse(bil_id, h_id):
+    check_bil_access(bil_id)
     with get_db() as conn:
         conn.execute("DELETE FROM handelser WHERE id=? AND bil_id=?", (h_id, bil_id))
     return redirect(url_for("bil", bil_id=bil_id))
@@ -632,28 +621,33 @@ def ta_bort_handelse(bil_id, h_id):
 @app.route("/bil/<int:bil_id>/ta-bort", methods=["POST"])
 @login_required
 def ta_bort_bil(bil_id):
+    check_bil_access(bil_id)
     with get_db() as conn:
         conn.execute("DELETE FROM handelser WHERE bil_id=?", (bil_id,))
         conn.execute("DELETE FROM serviceintervall WHERE bil_id=?", (bil_id,))
+        conn.execute("DELETE FROM kommentarer WHERE bil_id=?", (bil_id,))
         conn.execute("DELETE FROM bilar WHERE id=?", (bil_id,))
     return redirect(url_for("index"))
 
 @app.route("/bil/<int:bil_id>/print")
 @login_required
 def print_bil(bil_id):
+    b = check_bil_access(bil_id)
     with get_db() as conn:
-        b = conn.execute("SELECT * FROM bilar WHERE id=?", (bil_id,)).fetchone()
         handelser = conn.execute(
             "SELECT * FROM handelser WHERE bil_id=? ORDER BY km DESC", (bil_id,)
         ).fetchall()
     return render_template("print_bil.html", bil=b, handelser=handelser, today=str(date.today()))
 
-
 @app.route("/kommande")
 @login_required
 def kommande():
+    vid = current_user.verkstad_id
     with get_db() as conn:
-        bilar = conn.execute("SELECT * FROM bilar ORDER BY fordonsnummer, regnr").fetchall()
+        if vid is not None:
+            bilar = conn.execute("SELECT * FROM bilar WHERE verkstad_id=? ORDER BY fordonsnummer, regnr", (vid,)).fetchall()
+        else:
+            bilar = conn.execute("SELECT * FROM bilar ORDER BY fordonsnummer, regnr").fetchall()
 
     bilar_service = []
     for b in bilar:
@@ -669,25 +663,17 @@ def kommande():
         for typ, info in panel.items():
             diff = info["diff"]
             iv = info["intervall"]
-            if iv is None:
+            if iv is None or diff is None:
                 continue
-            # Visa om försenad ELLER inom 20% av intervallet
-            if diff is None:
-                pass  # Ingen km loggad alls, hoppa över
-            elif diff >= iv:
+            if diff >= iv:
                 atgarder.append({"typ": typ, "diff": diff, "intervall": iv, "status": "warn"})
             elif diff >= iv * 0.8:
                 atgarder.append({"typ": typ, "diff": diff, "intervall": iv, "status": "caution"})
         if atgarder:
-            # Sortera: försenade först, sedan närmast
-            atgarder.sort(key=lambda a: (
-                0 if a["diff"] is None or a["diff"] >= a["intervall"] else 1,
-                -(a["diff"] or 0)
-            ))
+            atgarder.sort(key=lambda a: (0 if a["diff"] >= a["intervall"] else 1, -(a["diff"] or 0)))
             bilar_service.append({"bil": b, "atgarder": atgarder})
 
     return render_template("kommande.html", bilar_service=bilar_service)
-
 
 @app.route("/arbetsorder", methods=["POST"])
 @login_required
@@ -699,13 +685,18 @@ def arbetsorder():
     bilar_data = []
     for bil_id in bil_ids:
         bil_id = int(bil_id)
+        # Kontrollera access utan abort — skippa tysta om fel verkstad
         with get_db() as conn:
             b = conn.execute("SELECT * FROM bilar WHERE id=?", (bil_id,)).fetchone()
+        if not b:
+            continue
+        vid = current_user.verkstad_id
+        if vid is not None and b["verkstad_id"] != vid:
+            continue
+        with get_db() as conn:
             handelser = conn.execute(
                 "SELECT * FROM handelser WHERE bil_id=? ORDER BY km DESC", (bil_id,)
             ).fetchall()
-        if not b:
-            continue
         senaste_km = handelser[0]["km"] if handelser else None
         if senaste_km is None:
             continue
@@ -714,9 +705,7 @@ def arbetsorder():
         for typ, info in panel.items():
             diff = info["diff"]
             iv = info["intervall"]
-            if iv is None:
-                continue
-            if diff is None:
+            if iv is None or diff is None:
                 continue
             if diff >= iv:
                 status = "warn"
@@ -724,21 +713,12 @@ def arbetsorder():
                 status = "caution"
             else:
                 continue
-            kvar = iv - diff
-            atgarder.append({
-                "typ": typ,
-                "diff": diff,
-                "intervall": iv,
-                "kvar": kvar,
-                "status": status
-            })
+            atgarder.append({"typ": typ, "diff": diff, "intervall": iv, "kvar": iv - diff, "status": status})
         if atgarder:
             atgarder.sort(key=lambda a: (0 if a["status"] == "warn" else 1, a["kvar"]))
             bilar_data.append({"bil": b, "atgarder": atgarder, "senaste_km": senaste_km})
 
-    today = str(date.today())
-    return render_template("arbetsorder.html", bilar_data=bilar_data, today=today)
-
+    return render_template("arbetsorder.html", bilar_data=bilar_data, today=str(date.today()))
 
 @app.route("/fordonsbibliotek")
 @login_required
@@ -754,8 +734,8 @@ def fordonsbibliotek():
 def ny_fordonsmodell():
     error = None
     if request.method == "POST":
-        marke   = request.form.get("marke","").strip()
-        modell  = request.form.get("modell","").strip()
+        marke     = request.form.get("marke","").strip()
+        modell    = request.form.get("modell","").strip()
         arsmodell = request.form.get("arsmodell","").strip()
         if not marke or not modell:
             error = "Märke och modell är obligatoriska."
@@ -767,7 +747,6 @@ def ny_fordonsmodell():
                         (marke, modell, int(arsmodell) if arsmodell.isdigit() else None)
                     )
                     fm_id = cur.lastrowid
-                # Spara intervall
                 for t in NEDRAKNARE_TYPER:
                     aktiv = request.form.get(f"aktiv_{t}") == "1"
                     iv_str = request.form.get(f"iv_{t}","").strip()
@@ -777,7 +756,6 @@ def ny_fordonsmodell():
                             "INSERT OR REPLACE INTO fordonsmodell_intervall (fordonsmodell_id, service_typ, intervall_km, aktiv) VALUES (?,?,?,?)",
                             (fm_id, t, iv_km, 1 if aktiv else 0)
                         )
-                # Egna servicetyper
                 egna_namn = request.form.getlist("egen_namn")
                 egna_km   = request.form.getlist("egen_km")
                 for namn, km_str in zip(egna_namn, egna_km):
@@ -812,8 +790,8 @@ def redigera_fordonsmodell(fm_id):
     error = None
 
     if request.method == "POST":
-        marke   = request.form.get("marke","").strip()
-        modell  = request.form.get("modell","").strip()
+        marke     = request.form.get("marke","").strip()
+        modell    = request.form.get("modell","").strip()
         arsmodell = request.form.get("arsmodell","").strip()
         if not marke or not modell:
             error = "Märke och modell är obligatoriska."
@@ -834,16 +812,14 @@ def redigera_fordonsmodell(fm_id):
                         "INSERT OR REPLACE INTO fordonsmodell_intervall (fordonsmodell_id, service_typ, intervall_km, aktiv) VALUES (?,?,?,?)",
                         (fm_id, t, iv_km, 1 if aktiv else 0)
                     )
-            # Egna servicetyper
-            egna_namn = request.form.getlist("egen_namn")
-            egna_km   = request.form.getlist("egen_km")
-            # Ta bort gamla egna typer från fordonsmodell_intervall
             with get_db() as conn:
                 conn.execute(
                     "DELETE FROM fordonsmodell_intervall WHERE fordonsmodell_id=? AND service_typ NOT IN ({})".format(
                         ",".join("?" * len(NEDRAKNARE_TYPER))
                     ), [fm_id] + NEDRAKNARE_TYPER
                 )
+            egna_namn = request.form.getlist("egen_namn")
+            egna_km   = request.form.getlist("egen_km")
             for namn, km_str in zip(egna_namn, egna_km):
                 namn = namn.strip()
                 if namn and km_str.strip().isdigit():
@@ -853,7 +829,6 @@ def redigera_fordonsmodell(fm_id):
                             "INSERT OR REPLACE INTO fordonsmodell_intervall (fordonsmodell_id, service_typ, intervall_km, aktiv) VALUES (?,?,?,?)",
                             (fm_id, namn, int(km_str), 1)
                         )
-            # Synka alla bilar av samma märke + modell + årsmodell
             ar = int(arsmodell) if arsmodell.isdigit() else None
             with get_db() as conn:
                 bilar = conn.execute(
@@ -880,11 +855,11 @@ def ta_bort_fordonsmodell(fm_id):
         conn.execute("DELETE FROM fordonsmodeller WHERE id=?", (fm_id,))
     return redirect(url_for("fordonsbibliotek"))
 
-
 @app.route("/importera-miltal", methods=["GET","POST"])
 @login_required
 def importera_miltal():
     resultat = []
+    vid = current_user.verkstad_id
     if request.method == "POST":
         fil = request.files.get("csv_fil")
         if not fil or not fil.filename.endswith(".csv"):
@@ -892,25 +867,29 @@ def importera_miltal():
 
         innehall = fil.read().decode("utf-8-sig").splitlines()
         reader = csv.DictReader(innehall)
-
-        # Normalisera kolumnnamn (hantera olika stavningar)
         for rad in reader:
             nycklar = {k.lower().strip(): v for k, v in rad.items()}
             regnr_raw = (nycklar.get("regnr") or nycklar.get("reg.nr") or nycklar.get("reg nr") or "").strip().upper()
-            regnr = regnr_raw.replace(" ", "")  # Normalisera bort mellanslag för jämförelse
+            regnr = regnr_raw.replace(" ", "")
             km_str = (nycklar.get("km") or nycklar.get("miltal") or nycklar.get("kilometer") or "").strip()
 
             if not regnr or not km_str:
                 resultat.append({"regnr": regnr or "?", "status": "fel", "msg": "Saknar regnr eller km"})
                 continue
-
             if not km_str.isdigit():
                 resultat.append({"regnr": regnr, "status": "fel", "msg": f"Ogiltigt km-värde: {km_str}"})
                 continue
 
             km = int(km_str)
             with get_db() as conn:
-                bil = conn.execute("SELECT * FROM bilar WHERE REPLACE(regnr,' ','')=?", (regnr,)).fetchone()
+                if vid is not None:
+                    bil = conn.execute(
+                        "SELECT * FROM bilar WHERE REPLACE(regnr,' ','')=? AND verkstad_id=?", (regnr, vid)
+                    ).fetchone()
+                else:
+                    bil = conn.execute(
+                        "SELECT * FROM bilar WHERE REPLACE(regnr,' ','')=?", (regnr,)
+                    ).fetchone()
 
             if not bil:
                 resultat.append({"regnr": regnr, "status": "fel", "msg": "Bilen finns inte i systemet"})
@@ -925,6 +904,7 @@ def importera_miltal():
 
     return render_template("importera_miltal.html", error=None, resultat=resultat)
 
+# ── AUTH ──────────────────────────────────────────────────────────────────────
 
 @app.route("/login", methods=["GET","POST"])
 def login():
@@ -935,8 +915,9 @@ def login():
     if blockerad:
         minuter = sekunder_kvar // 60
         sekunder = sekunder_kvar % 60
-        error = f"För många misslyckade försök. Försök igen om {minuter}m {sekunder}s."
-        return render_template("login.html", error=error, blockerad=True)
+        return render_template("login.html",
+            error=f"För många misslyckade försök. Försök igen om {minuter}m {sekunder}s.",
+            blockerad=True)
 
     error = None
     if request.method == "POST":
@@ -946,7 +927,7 @@ def login():
             row = conn.execute("SELECT * FROM anvandare WHERE username=?", (username,)).fetchone()
         if row and check_password_hash(row["password_hash"], password):
             rensa_forsok(ip)
-            user = User(row["id"], row["username"], row["namn"], row["roll"])
+            user = User(row["id"], row["username"], row["namn"], row["roll"], row["verkstad_id"])
             session.permanent = True
             login_user(user, remember=False)
             next_url = request.args.get("next")
@@ -957,8 +938,7 @@ def login():
         _, kvar = check_rate_limit(ip)
         forsok_kvar = MAX_ATTEMPTS - len(_login_attempts[ip])
         if forsok_kvar <= 0:
-            minuter = kvar // 60
-            error = f"För många misslyckade försök. Kontot är låst i {minuter} minuter."
+            error = f"För många misslyckade försök. Kontot är låst i {kvar // 60} minuter."
         else:
             error = f"Fel användarnamn eller lösenord. {forsok_kvar} försök kvar."
     return render_template("login.html", error=error, blockerad=False)
@@ -969,13 +949,21 @@ def logout():
     logout_user()
     return redirect(url_for("login"))
 
+# ── ADMIN (per verkstad) ──────────────────────────────────────────────────────
+
 @app.route("/admin")
 @login_required
 def admin():
     if current_user.roll != "admin":
         return redirect(url_for("index"))
+    vid = current_user.verkstad_id
     with get_db() as conn:
-        anvandare = conn.execute("SELECT id, username, namn, roll FROM anvandare ORDER BY namn").fetchall()
+        if vid is not None:
+            anvandare = conn.execute(
+                "SELECT id, username, namn, roll FROM anvandare WHERE verkstad_id=? ORDER BY namn", (vid,)
+            ).fetchall()
+        else:
+            anvandare = conn.execute("SELECT id, username, namn, roll FROM anvandare ORDER BY namn").fetchall()
     return render_template("admin.html", anvandare=anvandare)
 
 @app.route("/admin/ny", methods=["POST"])
@@ -987,12 +975,13 @@ def ny_anvandare():
     namn     = request.form.get("namn","").strip()
     password = request.form.get("password","")
     roll     = request.form.get("roll","anställd")
+    vid      = current_user.verkstad_id
     if username and namn and password:
         try:
             with get_db() as conn:
                 conn.execute(
-                    "INSERT INTO anvandare (username, namn, password_hash, roll) VALUES (?,?,?,?)",
-                    (username, namn, generate_password_hash(password), roll)
+                    "INSERT INTO anvandare (username, namn, password_hash, roll, verkstad_id) VALUES (?,?,?,?,?)",
+                    (username, namn, generate_password_hash(password), roll, vid)
                 )
         except: pass
     return redirect(url_for("admin"))
@@ -1044,18 +1033,33 @@ def mitt_konto():
                 error = "Fel nuvarande lösenord."
     return render_template("mitt_konto.html", error=error, success=success)
 
+# ── SUPERADMIN ────────────────────────────────────────────────────────────────
 
 SUPERADMIN_PASSWORD = os.environ.get("SUPERADMIN_PASSWORD", "revvbase-super-2026")
 
 @app.route("/superadmin/login", methods=["GET","POST"])
 def superadmin_login():
+    ip = request.remote_addr
+    blockerad, sekunder_kvar = check_rate_limit(ip, _sa_login_attempts)
+    if blockerad:
+        minuter = sekunder_kvar // 60
+        sekunder = sekunder_kvar % 60
+        return render_template("superadmin_login.html",
+            error=f"För många försök. Försök igen om {minuter}m {sekunder}s.")
+
     error = None
     if request.method == "POST":
         pw = request.form.get("password","")
         if pw == SUPERADMIN_PASSWORD:
+            rensa_forsok(ip, _sa_login_attempts)
             session["superadmin"] = True
             return redirect(url_for("superadmin"))
-        error = "Fel lösenord."
+        registrera_misslyckat(ip, _sa_login_attempts)
+        forsok_kvar = MAX_ATTEMPTS - len(_sa_login_attempts[ip])
+        if forsok_kvar <= 0:
+            error = f"För många försök. Kontot är låst i 15 minuter."
+        else:
+            error = f"Fel lösenord. {forsok_kvar} försök kvar."
     return render_template("superadmin_login.html", error=error)
 
 @app.route("/superadmin")
@@ -1073,12 +1077,12 @@ def superadmin():
             GROUP BY v.id
             ORDER BY v.skapad DESC
         """).fetchall()
-    totalt = len(verkstader)
-    aktiva = sum(1 for v in verkstader if v["status"] == "aktiv")
-    pausade = sum(1 for v in verkstader if v["status"] == "pausad")
-    bas = sum(1 for v in verkstader if v["paket"] == "bas")
+    totalt   = len(verkstader)
+    aktiva   = sum(1 for v in verkstader if v["status"] == "aktiv")
+    pausade  = sum(1 for v in verkstader if v["status"] == "pausad")
+    bas      = sum(1 for v in verkstader if v["paket"] == "bas")
     standard = sum(1 for v in verkstader if v["paket"] == "standard")
-    pro = sum(1 for v in verkstader if v["paket"] == "pro")
+    pro      = sum(1 for v in verkstader if v["paket"] == "pro")
     return render_template("superadmin.html",
         verkstader=verkstader, totalt=totalt, aktiva=aktiva,
         pausade=pausade, bas=bas, standard=standard, pro=pro)
@@ -1087,11 +1091,11 @@ def superadmin():
 def superadmin_ny_verkstad():
     if not session.get("superadmin"):
         return redirect(url_for("superadmin_login"))
-    namn = request.form.get("namn","").strip()
-    slug = request.form.get("slug","").strip().lower().replace(" ","-")
-    email = request.form.get("email","").strip().lower()
+    namn     = request.form.get("namn","").strip()
+    slug     = request.form.get("slug","").strip().lower().replace(" ","-")
+    email    = request.form.get("email","").strip().lower()
     password = request.form.get("password","").strip()
-    paket = request.form.get("paket","bas")
+    paket    = request.form.get("paket","bas")
     if namn and slug and email and password:
         try:
             with get_db() as conn:
@@ -1132,20 +1136,20 @@ def superadmin_logout():
     session.pop("superadmin", None)
     return redirect(url_for("superadmin_login"))
 
+# ── START ─────────────────────────────────────────────────────────────────────
+
 if __name__ == "__main__":
     os.makedirs(BACKUP_DIR, exist_ok=True)
     init_db()
-    # Skapa standard-admin om inga användare finns
     with get_db() as conn:
         count = conn.execute("SELECT COUNT(*) FROM anvandare").fetchone()[0]
     if count == 0:
         with get_db() as conn:
             conn.execute(
-                "INSERT INTO anvandare (username, namn, password_hash, roll) VALUES (?,?,?,?)",
-                ("admin", "Admin", generate_password_hash("verkstad123"), "admin")
+                "INSERT INTO anvandare (username, namn, password_hash, roll, verkstad_id) VALUES (?,?,?,?,?)",
+                ("admin", "Admin", generate_password_hash("verkstad123"), "admin", None)
             )
         print("Skapade standardanvändare: admin / verkstad123")
-        print("Byt lösenord direkt efter inloggning!")
     t = threading.Thread(target=daglig_backup, daemon=True)
     t.start()
     app.run(host="0.0.0.0", port=5001, debug=False)
