@@ -61,20 +61,25 @@ login_manager.login_view = "login"
 login_manager.login_message = "Logga in för att fortsätta."
 
 class User(UserMixin):
-    def __init__(self, id, username, namn, roll, verkstad_id):
+    def __init__(self, id, username, namn, roll, verkstad_id, slug=None):
         self.id = id
         self.username = username
         self.namn = namn
         self.roll = roll
         self.verkstad_id = verkstad_id  # None = superadmin/global admin
+        self.slug = slug  # Verkstadens slug för URL-routing
 
 @login_manager.user_loader
 def load_user(user_id):
     with get_db() as conn:
         row = conn.execute("SELECT * FROM anvandare WHERE id=?", (user_id,)).fetchone()
-    if row:
-        return User(row["id"], row["username"], row["namn"], row["roll"], row["verkstad_id"])
-    return None
+        if not row:
+            return None
+        slug = None
+        if row["verkstad_id"]:
+            v = conn.execute("SELECT slug FROM verkstader WHERE id=?", (row["verkstad_id"],)).fetchone()
+            slug = v["slug"] if v else None
+    return User(row["id"], row["username"], row["namn"], row["roll"], row["verkstad_id"], slug)
 
 # ── HJÄLPFUNKTIONER ───────────────────────────────────────────────────────────
 BACKUP_DIR = os.path.join(os.path.dirname(__file__), "säkerhetskopior")
@@ -343,6 +348,39 @@ def landing():
     if current_user.is_authenticated:
         return redirect(url_for("index"))
     return open('landing.html', encoding='utf-8').read()
+
+@app.route("/<slug>")
+@login_required
+def slug_dashboard(slug):
+    # Kontrollera att inloggad användare tillhör denna verkstad
+    with get_db() as conn:
+        v = conn.execute("SELECT id FROM verkstader WHERE slug=?", (slug,)).fetchone()
+    if not v:
+        return redirect(url_for("index"))
+    if current_user.verkstad_id is not None and current_user.verkstad_id != v["id"]:
+        # Fel verkstad — skicka till rätt slug
+        if current_user.slug:
+            return redirect(f"/{current_user.slug}")
+        return redirect(url_for("index"))
+    # Ladda dashboard med rätt verkstad_id
+    q = request.args.get("q", "").strip()
+    vid = current_user.verkstad_id
+    with get_db() as conn:
+        if q:
+            bilar = conn.execute(
+                "SELECT * FROM bilar WHERE verkstad_id=? AND (regnr LIKE ? OR marke LIKE ? OR modell LIKE ? OR fordonsnummer LIKE ? OR notering LIKE ?) ORDER BY regnr",
+                (vid, f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%")
+            ).fetchall() if vid is not None else conn.execute(
+                "SELECT * FROM bilar WHERE regnr LIKE ? OR marke LIKE ? OR modell LIKE ? OR fordonsnummer LIKE ? OR notering LIKE ? ORDER BY regnr",
+                (f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%")
+            ).fetchall()
+        else:
+            bilar = conn.execute(
+                "SELECT * FROM bilar WHERE verkstad_id=? ORDER BY fordonsnummer, regnr", (vid,)
+            ).fetchall() if vid is not None else conn.execute(
+                "SELECT * FROM bilar ORDER BY fordonsnummer, regnr"
+            ).fetchall()
+    return render_template("index.html", bilar=bilar, q=q)
 
 @app.route("/dashboard")
 @login_required
@@ -927,13 +965,22 @@ def login():
             row = conn.execute("SELECT * FROM anvandare WHERE username=?", (username,)).fetchone()
         if row and check_password_hash(row["password_hash"], password):
             rensa_forsok(ip)
-            user = User(row["id"], row["username"], row["namn"], row["roll"], row["verkstad_id"])
+            slug = None
+            if row["verkstad_id"]:
+                with get_db() as conn2:
+                    v = conn2.execute("SELECT slug FROM verkstader WHERE id=?", (row["verkstad_id"],)).fetchone()
+                    slug = v["slug"] if v else None
+            user = User(row["id"], row["username"], row["namn"], row["roll"], row["verkstad_id"], slug)
             session.permanent = True
             login_user(user, remember=False)
             next_url = request.args.get("next")
             if next_url and not next_url.startswith("/"):
                 next_url = None
-            return redirect(next_url or url_for("index"))
+            if next_url:
+                return redirect(next_url)
+            if slug:
+                return redirect(f"/{slug}")
+            return redirect(url_for("index"))
         registrera_misslyckat(ip)
         _, kvar = check_rate_limit(ip)
         forsok_kvar = MAX_ATTEMPTS - len(_login_attempts[ip])
