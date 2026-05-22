@@ -20,8 +20,8 @@
   <form method="post" class="form-card">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="form-group">
-      <label class="form-label">Användarnamn</label>
-      <input class="form-input" type="text" name="username" autofocus autocomplete="username" required {% if blockerad %}disabled{% endif %}>
+      <label class="form-label">E-post</label>
+      <input class="form-input" type="email" name="username" autofocus autocomplete="email" required {% if blockerad %}disabled{% endif %}>
     </div>
     <div class="form-group">
       <label class="form-label">Lösenord</label>

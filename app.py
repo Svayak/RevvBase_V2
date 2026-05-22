@@ -951,6 +951,8 @@ def logout():
 
 # ── ADMIN (per verkstad) ──────────────────────────────────────────────────────
 
+PAKET_SEATS = {"bas": 1, "standard": 5, "pro": 9999}
+
 @app.route("/admin")
 @login_required
 def admin():
@@ -962,9 +964,13 @@ def admin():
             anvandare = conn.execute(
                 "SELECT id, username, namn, roll FROM anvandare WHERE verkstad_id=? ORDER BY namn", (vid,)
             ).fetchall()
+            v = conn.execute("SELECT paket FROM verkstader WHERE id=?", (vid,)).fetchone()
+            verkstad_paket = v["paket"] if v else "bas"
         else:
             anvandare = conn.execute("SELECT id, username, namn, roll FROM anvandare ORDER BY namn").fetchall()
-    return render_template("admin.html", anvandare=anvandare)
+            verkstad_paket = "pro"
+    error = request.args.get("error")
+    return render_template("admin.html", anvandare=anvandare, verkstad_paket=verkstad_paket, error=error)
 
 @app.route("/admin/ny", methods=["POST"])
 @login_required
@@ -976,14 +982,25 @@ def ny_anvandare():
     password = request.form.get("password","")
     roll     = request.form.get("roll","anställd")
     vid      = current_user.verkstad_id
-    if username and namn and password:
-        try:
-            with get_db() as conn:
-                conn.execute(
-                    "INSERT INTO anvandare (username, namn, password_hash, roll, verkstad_id) VALUES (?,?,?,?,?)",
-                    (username, namn, generate_password_hash(password), roll, vid)
-                )
-        except: pass
+    if not (username and namn and password):
+        return redirect(url_for("admin"))
+    # Kontrollera seat-gräns
+    if vid is not None:
+        with get_db() as conn:
+            v = conn.execute("SELECT paket FROM verkstader WHERE id=?", (vid,)).fetchone()
+            paket = v["paket"] if v else "bas"
+            max_seats = PAKET_SEATS.get(paket, 1)
+            antal = conn.execute("SELECT COUNT(*) FROM anvandare WHERE verkstad_id=?", (vid,)).fetchone()[0]
+        if antal >= max_seats:
+            return redirect(url_for("admin", error=f"Paketet {paket.capitalize()} tillåter max {max_seats} användare. Uppgradera för att lägga till fler."))
+    try:
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO anvandare (username, namn, password_hash, roll, verkstad_id) VALUES (?,?,?,?,?)",
+                (username, namn, generate_password_hash(password), roll, vid)
+            )
+    except sqlite3.IntegrityError:
+        return redirect(url_for("admin", error=f"E-postadressen {username} används redan."))
     return redirect(url_for("admin"))
 
 @app.route("/admin/byt-losenord/<int:anv_id>", methods=["POST"])
