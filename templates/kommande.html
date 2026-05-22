@@ -15,7 +15,8 @@
       <input type="checkbox" id="valj-alla" onchange="valjAlla(this)">
       <span class="checkbox-label">Välj alla</span>
     </label>
-    <button type="submit" class="btn btn-primary">🖨 Exportera arbetsorder</button>
+    <button type="submit" class="btn btn-primary" onclick="return valideraVal(event)">🖨 Exportera arbetsorder</button>
+    <span id="val-fel" style="display:none; background:#2b0d0d; border:1px solid #7a1a1a; color:#ff9090; font-size:0.82rem; padding:0.35rem 0.75rem; border-radius:6px;">Välj minst ett fordon</span>
   </div>
 
   <div class="kommande-lista">
@@ -63,6 +64,18 @@
 <script>
 function valjAlla(cb) {
   document.querySelectorAll('.bil-checkbox').forEach(function(el){ el.checked = cb.checked; });
+}
+function valideraVal(e) {
+  var vald = document.querySelectorAll('.bil-checkbox:checked').length;
+  var fel = document.getElementById('val-fel');
+  if (vald === 0) {
+    e.preventDefault();
+    fel.style.display = 'inline-block';
+    setTimeout(function(){ fel.style.display = 'none'; }, 3000);
+    return false;
+  }
+  fel.style.display = 'none';
+  return true;
 }
 </script>
 {% endblock %}
