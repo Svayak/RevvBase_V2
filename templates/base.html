@@ -31,12 +31,44 @@
         <a href="{{ url_for('logout') }}" class="nav-link" style="font-size:0.8rem; color:#e05050;">Logga ut</a>
       </div>
     </nav>
+    <button class="hamburger" onclick="toggleMenu()" aria-label="Meny">
+      <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <line x1="3" y1="6" x2="19" y2="6"/><line x1="3" y1="11" x2="19" y2="11"/><line x1="3" y1="16" x2="19" y2="16"/>
+      </svg>
+    </button>
   </header>
+
+  <div class="mobile-menu" id="mobileMenu">
+    <a href="{{ url_for('index') }}" onclick="closeMenu()">Alla bilar</a>
+    <a href="{{ url_for('kommande') }}" onclick="closeMenu()">Kommande service</a>
+    <a href="{{ url_for('fordonsbibliotek') }}" onclick="closeMenu()">Fordonsbibliotek</a>
+    {% if current_user.is_authenticated and current_user.roll == "admin" %}
+    <a href="{{ url_for('admin') }}" onclick="closeMenu()">Admin</a>
+    {% endif %}
+    <a href="{{ url_for('mitt_konto') }}" onclick="closeMenu()">Konto</a>
+    <a href="{{ url_for('ny_bil') }}" class="mobile-btn" onclick="closeMenu()">+ Ny bil</a>
+    <a href="{{ url_for('logout') }}" style="color:#e05050;" onclick="closeMenu()">Logga ut</a>
+  </div>
 
   <main class="main-content">
     {% block content %}{% endblock %}
   </main>
 
   <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  <script>
+    function toggleMenu() {
+      document.getElementById('mobileMenu').classList.toggle('open');
+    }
+    function closeMenu() {
+      document.getElementById('mobileMenu').classList.remove('open');
+    }
+    document.addEventListener('click', function(e) {
+      var menu = document.getElementById('mobileMenu');
+      var btn = document.querySelector('.hamburger');
+      if (menu && btn && !menu.contains(e.target) && !btn.contains(e.target)) {
+        menu.classList.remove('open');
+      }
+    });
+  </script>
 </body>
 </html>
