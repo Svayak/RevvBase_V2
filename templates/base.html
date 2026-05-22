@@ -10,7 +10,7 @@
 </head>
 <body>
   <header class="site-header">
-    <a href="{{ url_for('index') }}" class="logo">
+    <a href="/{{ current_user.slug if current_user.slug else 'dashboard' }}" class="logo">
       <svg width="132" height="47" viewBox="0 0 680 240.05" role="img" style="display:block;">
         <title>Revvbase</title>
         <text x="340" y="120" text-anchor="middle" font-size="96" fill="#f0a500" style="font-family:'Arial Black','Helvetica Neue',Arial,sans-serif;font-weight:900;">REVV</text>

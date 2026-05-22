@@ -402,6 +402,8 @@ def slug_dashboard(slug):
 @app.route("/dashboard")
 @login_required
 def index():
+    if current_user.slug:
+        return redirect(f"/{current_user.slug}")
     pausad = check_aktiv()
     if pausad:
         return pausad
