@@ -366,9 +366,17 @@ def landing():
         return redirect(url_for("index"))
     return open('landing.html', encoding='utf-8').read()
 
+RESERVERADE_SLUGS = {
+    "bil", "dashboard", "kommande", "arbetsorder", "fordonsbibliotek",
+    "importera-miltal", "exportera", "login", "logout", "admin",
+    "mitt-konto", "superadmin", "static"
+}
+
 @app.route("/<slug>")
 @login_required
 def slug_dashboard(slug):
+    if slug in RESERVERADE_SLUGS:
+        return redirect(url_for("index"))
     pausad = check_aktiv()
     if pausad:
         return pausad
