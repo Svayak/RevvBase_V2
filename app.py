@@ -144,6 +144,20 @@ def check_bil_access(bil_id):
         abort(403)
     return b
 
+def get_verkstad_status():
+    """Returnerar verkstadens status eller 'aktiv' om ingen verkstad kopplad."""
+    if current_user.verkstad_id is None:
+        return "aktiv"
+    with get_db() as conn:
+        v = conn.execute("SELECT status FROM verkstader WHERE id=?", (current_user.verkstad_id,)).fetchone()
+    return v["status"] if v else "aktiv"
+
+def check_aktiv():
+    """Returnerar None om aktiv, annars en redirect till pausad-sidan."""
+    if get_verkstad_status() == "pausad":
+        return render_template("pausad.html")
+    return None
+
 def init_db():
     with get_db() as conn:
         conn.executescript("""
@@ -352,6 +366,9 @@ def landing():
 @app.route("/<slug>")
 @login_required
 def slug_dashboard(slug):
+    pausad = check_aktiv()
+    if pausad:
+        return pausad
     # Kontrollera att inloggad användare tillhör denna verkstad
     with get_db() as conn:
         v = conn.execute("SELECT id FROM verkstader WHERE slug=?", (slug,)).fetchone()
@@ -385,6 +402,9 @@ def slug_dashboard(slug):
 @app.route("/dashboard")
 @login_required
 def index():
+    pausad = check_aktiv()
+    if pausad:
+        return pausad
     q = request.args.get("q", "").strip()
     vid = current_user.verkstad_id
     with get_db() as conn:
@@ -407,6 +427,9 @@ def index():
 @app.route("/bil/ny", methods=["GET","POST"])
 @login_required
 def ny_bil():
+    pausad = check_aktiv()
+    if pausad:
+        return pausad
     error = None
     with get_db() as conn:
         bibliotek = conn.execute(
@@ -680,6 +703,9 @@ def print_bil(bil_id):
 @app.route("/kommande")
 @login_required
 def kommande():
+    pausad = check_aktiv()
+    if pausad:
+        return pausad
     vid = current_user.verkstad_id
     with get_db() as conn:
         if vid is not None:
@@ -941,6 +967,53 @@ def importera_miltal():
             resultat.append({"regnr": regnr, "status": "ok", "msg": f"Registrerad: {km} km"})
 
     return render_template("importera_miltal.html", error=None, resultat=resultat)
+
+@app.route("/exportera")
+@login_required
+def exportera_data():
+    """Exporterar all fordonsdata för verkstaden som CSV. Tillgänglig även för pausade konton."""
+    import io
+    vid = current_user.verkstad_id
+    with get_db() as conn:
+        if vid is not None:
+            bilar = conn.execute("SELECT * FROM bilar WHERE verkstad_id=?", (vid,)).fetchall()
+        else:
+            bilar = conn.execute("SELECT * FROM bilar").fetchall()
+        handelser = []
+        for b in bilar:
+            hs = conn.execute(
+                "SELECT * FROM handelser WHERE bil_id=? ORDER BY km DESC", (b["id"],)
+            ).fetchall()
+            for h in hs:
+                handelser.append((b, h))
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["regnr", "fordonsnummer", "marke", "modell", "arsmodell", "notering",
+                     "datum", "km", "typ", "service_typer", "beskrivning", "skapad_av"])
+    for b, h in handelser:
+        writer.writerow([
+            b["regnr"], b["fordonsnummer"] or "", b["marke"], b["modell"],
+            b["arsmodell"] or "", b["notering"] or "",
+            h["datum"], h["km"], h["typ"],
+            h["service_typer"] or "", h["beskrivning"] or "", h["skapad_av"] or ""
+        ])
+    if not handelser:
+        for b in bilar:
+            writer.writerow([
+                b["regnr"], b["fordonsnummer"] or "", b["marke"], b["modell"],
+                b["arsmodell"] or "", b["notering"] or "",
+                "", "", "", "", "", ""
+            ])
+
+    from flask import Response
+    output.seek(0)
+    filename = f"revvbase_export_{date.today()}.csv"
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
 
 # ── AUTH ──────────────────────────────────────────────────────────────────────
 
