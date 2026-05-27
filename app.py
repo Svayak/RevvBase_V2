@@ -349,6 +349,10 @@ def daglig_backup():
                 if not os.path.exists(fil):
                     try:
                         with get_db() as conn:
+                            bilar = conn.execute(
+                                "SELECT id, regnr, fordonsnummer, marke, modell, arsmodell, notering FROM bilar WHERE verkstad_id = ?",
+                                (verkstad_id,)
+                            ).fetchall()
                             handelser = conn.execute("""
                                 SELECT h.*, b.regnr, b.fordonsnummer, b.marke, b.modell
                                 FROM handelser h
@@ -357,10 +361,19 @@ def daglig_backup():
                             """, (verkstad_id,)).fetchall()
                         with open(fil, "w", newline="", encoding="utf-8") as f:
                             writer = csv.writer(f)
-                            writer.writerow(["typ","id","bil_id","regnr","fordonsnummer","marke","modell","datum","km","handelse_typ","service_typer","beskrivning"])
+                            writer.writerow(["## BILAR"])
+                            writer.writerow(["id","regnr","fordonsnummer","marke","modell","arsmodell","notering"])
+                            for b in bilar:
+                                writer.writerow([
+                                    b["id"], b["regnr"], b["fordonsnummer"],
+                                    b["marke"], b["modell"], b["arsmodell"], b["notering"]
+                                ])
+                            writer.writerow([])
+                            writer.writerow(["## HÄNDELSER"])
+                            writer.writerow(["id","bil_id","regnr","fordonsnummer","marke","modell","datum","km","typ","service_typer","beskrivning"])
                             for h in handelser:
                                 writer.writerow([
-                                    "händelse", h["id"], h["bil_id"],
+                                    h["id"], h["bil_id"],
                                     h["regnr"], h["fordonsnummer"], h["marke"], h["modell"],
                                     h["datum"], h["km"], h["typ"],
                                     h["service_typer"], h["beskrivning"]
