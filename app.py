@@ -471,51 +471,51 @@ def ny_bil():
                 if antal >= max_fordon:
                     error = f"Paketet {paket.capitalize()} tillåter max {max_fordon} fordon. Uppgradera för att lägga till fler."
             if not error:
+                vid = current_user.verkstad_id
                 try:
-                    vid = current_user.verkstad_id
-                with get_db() as conn:
-                    cur = conn.execute(
-                        "INSERT INTO bilar (regnr,fordonsnummer,marke,modell,arsmodell,notering,verkstad_id) VALUES (?,?,?,?,?,?,?)",
-                        (regnr, fordonsnummer or None, marke, modell, arsmodell or None, notering, vid)
-                    )
-                    bil_id = cur.lastrowid
-
-                iv_dict = {}
-                for t in NEDRAKNARE_TYPER:
-                    aktiv = request.form.get(f"aktiv_{t}") == "1"
-                    iv_str = request.form.get(f"iv_{t}", "").strip()
-                    iv_km = int(iv_str) if iv_str.isdigit() else None
-                    iv_dict[t] = {"intervall": iv_km, "aktiv": aktiv, "egen": False}
-                egna_namn = request.form.getlist("egen_namn")
-                egna_km   = request.form.getlist("egen_km")
-                for namn, km_str in zip(egna_namn, egna_km):
-                    namn = namn.strip()
-                    if namn and km_str.strip().isdigit():
-                        iv_dict[namn] = {"intervall": int(km_str), "aktiv": True, "egen": True}
-                spara_intervall(bil_id, iv_dict)
-
-                ar = int(arsmodell) if arsmodell.isdigit() else None
-                with get_db() as conn:
-                    befintlig = conn.execute(
-                        "SELECT id FROM fordonsmodeller WHERE marke=? AND modell=? AND (arsmodell=? OR (arsmodell IS NULL AND ? IS NULL))",
-                        (marke, modell, ar, ar)
-                    ).fetchone()
-                if not befintlig:
                     with get_db() as conn:
                         cur = conn.execute(
-                            "INSERT INTO fordonsmodeller (marke, modell, arsmodell) VALUES (?,?,?)",
-                            (marke, modell, ar)
+                            "INSERT INTO bilar (regnr,fordonsnummer,marke,modell,arsmodell,notering,verkstad_id) VALUES (?,?,?,?,?,?,?)",
+                            (regnr, fordonsnummer or None, marke, modell, arsmodell or None, notering, vid)
                         )
-                        fm_id = cur.lastrowid
-                    for t, info in iv_dict.items():
+                        bil_id = cur.lastrowid
+
+                    iv_dict = {}
+                    for t in NEDRAKNARE_TYPER:
+                        aktiv = request.form.get(f"aktiv_{t}") == "1"
+                        iv_str = request.form.get(f"iv_{t}", "").strip()
+                        iv_km = int(iv_str) if iv_str.isdigit() else None
+                        iv_dict[t] = {"intervall": iv_km, "aktiv": aktiv, "egen": False}
+                    egna_namn = request.form.getlist("egen_namn")
+                    egna_km   = request.form.getlist("egen_km")
+                    for namn, km_str in zip(egna_namn, egna_km):
+                        namn = namn.strip()
+                        if namn and km_str.strip().isdigit():
+                            iv_dict[namn] = {"intervall": int(km_str), "aktiv": True, "egen": True}
+                    spara_intervall(bil_id, iv_dict)
+
+                    ar = int(arsmodell) if arsmodell.isdigit() else None
+                    with get_db() as conn:
+                        befintlig = conn.execute(
+                            "SELECT id FROM fordonsmodeller WHERE marke=? AND modell=? AND (arsmodell=? OR (arsmodell IS NULL AND ? IS NULL))",
+                            (marke, modell, ar, ar)
+                        ).fetchone()
+                    if not befintlig:
                         with get_db() as conn:
-                            conn.execute(
-                                "INSERT OR REPLACE INTO fordonsmodell_intervall (fordonsmodell_id, service_typ, intervall_km, aktiv) VALUES (?,?,?,?)",
-                                (fm_id, t, info.get("intervall"), 1 if info.get("aktiv") else 0)
+                            cur = conn.execute(
+                                "INSERT INTO fordonsmodeller (marke, modell, arsmodell) VALUES (?,?,?)",
+                                (marke, modell, ar)
                             )
-                return redirect(url_for("index"))
-            except sqlite3.IntegrityError:
-                error = f"Reg.nr {regnr} finns redan i systemet."
+                            fm_id = cur.lastrowid
+                        for t, info in iv_dict.items():
+                            with get_db() as conn:
+                                conn.execute(
+                                    "INSERT OR REPLACE INTO fordonsmodell_intervall (fordonsmodell_id, service_typ, intervall_km, aktiv) VALUES (?,?,?,?)",
+                                    (fm_id, t, info.get("intervall"), 1 if info.get("aktiv") else 0)
+                                )
+                    return redirect(url_for("index"))
+                except sqlite3.IntegrityError:
+                    error = f"Reg.nr {regnr} finns redan i systemet."
 
     return render_template("ny_bil.html", error=error,
         nedraknare_typer=NEDRAKNARE_TYPER, bibliotek=bibliotek)
