@@ -472,7 +472,7 @@ def ny_bil():
                     error = f"Paketet {paket.capitalize()} tillåter max {max_fordon} fordon. Uppgradera för att lägga till fler."
             if not error:
                 try:
-                vid = current_user.verkstad_id
+                    vid = current_user.verkstad_id
                 with get_db() as conn:
                     cur = conn.execute(
                         "INSERT INTO bilar (regnr,fordonsnummer,marke,modell,arsmodell,notering,verkstad_id) VALUES (?,?,?,?,?,?,?)",
