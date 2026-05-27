@@ -459,18 +459,19 @@ def ny_bil():
 
         if not regnr or not marke or not modell:
             error = "Reg.nr, märke och modell är obligatoriska."
-        elif current_user.verkstad_id is not None:
-            # Kontrollera fordonskvot
-            PAKET_FORDON = {"bas": 25, "standard": 100, "pro": 9999}
-            with get_db() as conn:
-                v = conn.execute("SELECT paket FROM verkstader WHERE id=?", (current_user.verkstad_id,)).fetchone()
-                paket = v["paket"] if v else "bas"
-                antal = conn.execute("SELECT COUNT(*) FROM bilar WHERE verkstad_id=?", (current_user.verkstad_id,)).fetchone()[0]
-            max_fordon = PAKET_FORDON.get(paket, 25)
-            if antal >= max_fordon:
-                error = f"Paketet {paket.capitalize()} tillåter max {max_fordon} fordon. Uppgradera för att lägga till fler."
         else:
-            try:
+            # Kontrollera fordonskvot för verkstadskonton
+            if current_user.verkstad_id is not None:
+                PAKET_FORDON = {"bas": 25, "standard": 100, "pro": 9999}
+                with get_db() as conn:
+                    v = conn.execute("SELECT paket FROM verkstader WHERE id=?", (current_user.verkstad_id,)).fetchone()
+                    paket = v["paket"] if v else "bas"
+                    antal = conn.execute("SELECT COUNT(*) FROM bilar WHERE verkstad_id=?", (current_user.verkstad_id,)).fetchone()[0]
+                max_fordon = PAKET_FORDON.get(paket, 25)
+                if antal >= max_fordon:
+                    error = f"Paketet {paket.capitalize()} tillåter max {max_fordon} fordon. Uppgradera för att lägga till fler."
+            if not error:
+                try:
                 vid = current_user.verkstad_id
                 with get_db() as conn:
                     cur = conn.execute(
