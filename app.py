@@ -250,6 +250,9 @@ def init_db():
             conn.execute("ALTER TABLE bilar ADD COLUMN verkstad_id INTEGER")
         except: pass
         try:
+            conn.execute("ALTER TABLE bilar ADD COLUMN verkstad_id INTEGER")
+        except: pass
+        try:
             conn.execute("ALTER TABLE anvandare ADD COLUMN senaste_inloggning TEXT")
         except: pass
 
@@ -334,26 +337,38 @@ def daglig_backup():
     while True:
         nu = datetime.now()
         idag = nu.strftime("%Y-%m-%d")
-        os.makedirs(BACKUP_DIR, exist_ok=True)
-        fil = os.path.join(BACKUP_DIR, f"{idag}.csv")
-        if not os.path.exists(fil):
-            try:
-                with get_db() as conn:
-                    handelser = conn.execute(
-                        "SELECT h.*, b.regnr, b.fordonsnummer, b.marke, b.modell FROM handelser h JOIN bilar b ON h.bil_id=b.id"
-                    ).fetchall()
-                with open(fil, "w", newline="", encoding="utf-8") as f:
-                    writer = csv.writer(f)
-                    writer.writerow(["typ","id","bil_id","regnr","fordonsnummer","marke","modell","datum","km","handelse_typ","service_typer","beskrivning"])
-                    for h in handelser:
-                        writer.writerow([
-                            "händelse", h["id"], h["bil_id"],
-                            h["regnr"], h["fordonsnummer"], h["marke"], h["modell"],
-                            h["datum"], h["km"], h["typ"],
-                            h["service_typer"], h["beskrivning"]
-                        ])
-            except Exception as e:
-                print(f"Backup fel: {e}")
+        try:
+            with get_db() as conn:
+                verkstader = conn.execute("SELECT id, slug FROM verkstader").fetchall()
+            for v in verkstader:
+                slug = v["slug"]
+                verkstad_id = v["id"]
+                mapp = os.path.join(BACKUP_DIR, slug)
+                os.makedirs(mapp, exist_ok=True)
+                fil = os.path.join(mapp, f"{idag}.csv")
+                if not os.path.exists(fil):
+                    try:
+                        with get_db() as conn:
+                            handelser = conn.execute("""
+                                SELECT h.*, b.regnr, b.fordonsnummer, b.marke, b.modell
+                                FROM handelser h
+                                JOIN bilar b ON h.bil_id = b.id
+                                WHERE b.verkstad_id = ?
+                            """, (verkstad_id,)).fetchall()
+                        with open(fil, "w", newline="", encoding="utf-8") as f:
+                            writer = csv.writer(f)
+                            writer.writerow(["typ","id","bil_id","regnr","fordonsnummer","marke","modell","datum","km","handelse_typ","service_typer","beskrivning"])
+                            for h in handelser:
+                                writer.writerow([
+                                    "händelse", h["id"], h["bil_id"],
+                                    h["regnr"], h["fordonsnummer"], h["marke"], h["modell"],
+                                    h["datum"], h["km"], h["typ"],
+                                    h["service_typer"], h["beskrivning"]
+                                ])
+                    except Exception as e:
+                        print(f"Backup fel ({slug}): {e}")
+        except Exception as e:
+            print(f"Backup fel (verkstadslista): {e}")
         time.sleep(3600)
 
 # ── ROUTES ───────────────────────────────────────────────────────────────────
