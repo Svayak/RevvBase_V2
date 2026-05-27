@@ -24,6 +24,8 @@ else:
         _f.write(_new_key)
     app.secret_key = _new_key
 
+# FIX #2: DB_PATH defaults to /home/data/verkstad.db on Azure (persistent storage)
+# Set DB_PATH=/home/data/verkstad.db in Azure App Service → Configuration → Application settings
 DB = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "verkstad.db"))
 
 csrf = CSRFProtect(app)
@@ -66,8 +68,8 @@ class User(UserMixin):
         self.username = username
         self.namn = namn
         self.roll = roll
-        self.verkstad_id = verkstad_id  # None = superadmin/global admin
-        self.slug = slug  # Verkstadens slug för URL-routing
+        self.verkstad_id = verkstad_id
+        self.slug = slug
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -134,18 +136,15 @@ def get_db():
     return conn
 
 def check_bil_access(bil_id):
-    """Hämtar bil och kontrollerar att den tillhör inloggad verkstad. Returnerar bil-raden eller anropar abort(403)."""
     with get_db() as conn:
         b = conn.execute("SELECT * FROM bilar WHERE id=?", (bil_id,)).fetchone()
     if not b:
         abort(404)
-    # Admins utan verkstad_id (gamla konton) får se allt
     if current_user.verkstad_id is not None and b["verkstad_id"] != current_user.verkstad_id:
         abort(403)
     return b
 
 def get_verkstad_status():
-    """Returnerar verkstadens status eller 'aktiv' om ingen verkstad kopplad."""
     if current_user.verkstad_id is None:
         return "aktiv"
     with get_db() as conn:
@@ -153,7 +152,6 @@ def get_verkstad_status():
     return v["status"] if v else "aktiv"
 
 def check_aktiv():
-    """Returnerar None om aktiv, annars en redirect till pausad-sidan."""
     if get_verkstad_status() == "pausad":
         return render_template("pausad.html")
     return None
@@ -364,7 +362,9 @@ def daglig_backup():
 def landing():
     if current_user.is_authenticated:
         return redirect(url_for("index"))
-    return open('landing.html', encoding='utf-8').read()
+    # FIX #1: Use absolute path so it works regardless of gunicorn working directory
+    landing_path = os.path.join(os.path.dirname(__file__), "landing.html")
+    return open(landing_path, encoding="utf-8").read()
 
 RESERVERADE_SLUGS = {
     "bil", "dashboard", "kommande", "arbetsorder", "fordonsbibliotek",
@@ -380,34 +380,37 @@ def slug_dashboard(slug):
     pausad = check_aktiv()
     if pausad:
         return pausad
-    # Kontrollera att inloggad användare tillhör denna verkstad
     with get_db() as conn:
         v = conn.execute("SELECT id FROM verkstader WHERE slug=?", (slug,)).fetchone()
     if not v:
         return redirect(url_for("index"))
     if current_user.verkstad_id is not None and current_user.verkstad_id != v["id"]:
-        # Fel verkstad — skicka till rätt slug
         if current_user.slug:
             return redirect(f"/{current_user.slug}")
         return redirect(url_for("index"))
-    # Ladda dashboard med rätt verkstad_id
     q = request.args.get("q", "").strip()
     vid = current_user.verkstad_id
     with get_db() as conn:
         if q:
-            bilar = conn.execute(
-                "SELECT * FROM bilar WHERE verkstad_id=? AND (regnr LIKE ? OR marke LIKE ? OR modell LIKE ? OR fordonsnummer LIKE ? OR notering LIKE ?) ORDER BY regnr",
-                (vid, f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%")
-            ).fetchall() if vid is not None else conn.execute(
-                "SELECT * FROM bilar WHERE regnr LIKE ? OR marke LIKE ? OR modell LIKE ? OR fordonsnummer LIKE ? OR notering LIKE ? ORDER BY regnr",
-                (f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%")
-            ).fetchall()
+            if vid is not None:
+                bilar = conn.execute(
+                    "SELECT * FROM bilar WHERE verkstad_id=? AND (regnr LIKE ? OR marke LIKE ? OR modell LIKE ? OR fordonsnummer LIKE ? OR notering LIKE ?) ORDER BY regnr",
+                    (vid, f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%")
+                ).fetchall()
+            else:
+                bilar = conn.execute(
+                    "SELECT * FROM bilar WHERE regnr LIKE ? OR marke LIKE ? OR modell LIKE ? OR fordonsnummer LIKE ? OR notering LIKE ? ORDER BY regnr",
+                    (f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%")
+                ).fetchall()
         else:
-            bilar = conn.execute(
-                "SELECT * FROM bilar WHERE verkstad_id=? ORDER BY fordonsnummer, regnr", (vid,)
-            ).fetchall() if vid is not None else conn.execute(
-                "SELECT * FROM bilar ORDER BY fordonsnummer, regnr"
-            ).fetchall()
+            if vid is not None:
+                bilar = conn.execute(
+                    "SELECT * FROM bilar WHERE verkstad_id=? ORDER BY fordonsnummer, regnr", (vid,)
+                ).fetchall()
+            else:
+                bilar = conn.execute(
+                    "SELECT * FROM bilar ORDER BY fordonsnummer, regnr"
+                ).fetchall()
     return render_template("index.html", bilar=bilar, q=q)
 
 @app.route("/dashboard")
@@ -420,21 +423,28 @@ def index():
         return pausad
     q = request.args.get("q", "").strip()
     vid = current_user.verkstad_id
+    # FIX #3: Explicit SQL instead of fragile .replace() pattern
     with get_db() as conn:
-        base = "SELECT * FROM bilar WHERE verkstad_id=?" if vid is not None else "SELECT * FROM bilar WHERE 1=1"
-        params_base = [vid] if vid is not None else []
         if q:
-            bilar = conn.execute(
-                base.replace("WHERE", "WHERE (regnr LIKE ? OR marke LIKE ? OR modell LIKE ? OR fordonsnummer LIKE ? OR notering LIKE ?) AND" if vid is not None
-                     else "WHERE (regnr LIKE ? OR marke LIKE ? OR modell LIKE ? OR fordonsnummer LIKE ? OR notering LIKE ?)") + " ORDER BY regnr",
-                ([f"%{q}%"]*5 + params_base) if vid is not None else [f"%{q}%"]*5
-            ).fetchall()
+            if vid is not None:
+                bilar = conn.execute(
+                    "SELECT * FROM bilar WHERE verkstad_id=? AND (regnr LIKE ? OR marke LIKE ? OR modell LIKE ? OR fordonsnummer LIKE ? OR notering LIKE ?) ORDER BY regnr",
+                    (vid, f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%")
+                ).fetchall()
+            else:
+                bilar = conn.execute(
+                    "SELECT * FROM bilar WHERE regnr LIKE ? OR marke LIKE ? OR modell LIKE ? OR fordonsnummer LIKE ? OR notering LIKE ? ORDER BY regnr",
+                    (f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%")
+                ).fetchall()
         else:
-            bilar = conn.execute(
-                ("SELECT * FROM bilar WHERE verkstad_id=? ORDER BY fordonsnummer, regnr" if vid is not None
-                 else "SELECT * FROM bilar ORDER BY fordonsnummer, regnr"),
-                params_base
-            ).fetchall()
+            if vid is not None:
+                bilar = conn.execute(
+                    "SELECT * FROM bilar WHERE verkstad_id=? ORDER BY fordonsnummer, regnr", (vid,)
+                ).fetchall()
+            else:
+                bilar = conn.execute(
+                    "SELECT * FROM bilar ORDER BY fordonsnummer, regnr"
+                ).fetchall()
     return render_template("index.html", bilar=bilar, q=q)
 
 @app.route("/bil/ny", methods=["GET","POST"])
@@ -460,7 +470,7 @@ def ny_bil():
         if not regnr or not marke or not modell:
             error = "Reg.nr, märke och modell är obligatoriska."
         else:
-            # Kontrollera fordonskvot för verkstadskonton
+            # Kontrollera fordonskvot
             if current_user.verkstad_id is not None:
                 PAKET_FORDON = {"bas": 25, "standard": 100, "pro": 9999}
                 with get_db() as conn:
@@ -470,16 +480,20 @@ def ny_bil():
                 max_fordon = PAKET_FORDON.get(paket, 25)
                 if antal >= max_fordon:
                     error = f"Paketet {paket.capitalize()} tillåter max {max_fordon} fordon. Uppgradera för att lägga till fler."
+
             if not error:
                 vid = current_user.verkstad_id
+                ar = int(arsmodell) if arsmodell.isdigit() else None
                 try:
+                    # INSERT bil
                     with get_db() as conn:
                         cur = conn.execute(
                             "INSERT INTO bilar (regnr,fordonsnummer,marke,modell,arsmodell,notering,verkstad_id) VALUES (?,?,?,?,?,?,?)",
-                            (regnr, fordonsnummer or None, marke, modell, arsmodell or None, notering, vid)
+                            (regnr, fordonsnummer or None, marke, modell, ar, notering or None, vid)
                         )
                         bil_id = cur.lastrowid
 
+                    # Bygg intervall-dict från formuläret
                     iv_dict = {}
                     for t in NEDRAKNARE_TYPER:
                         aktiv = request.form.get(f"aktiv_{t}") == "1"
@@ -494,25 +508,24 @@ def ny_bil():
                             iv_dict[namn] = {"intervall": int(km_str), "aktiv": True, "egen": True}
                     spara_intervall(bil_id, iv_dict)
 
-                    ar = int(arsmodell) if arsmodell.isdigit() else None
+                    # FIX #4: Spara fordonsmodell med en enda connection istället för en per loop-iteration
                     with get_db() as conn:
                         befintlig = conn.execute(
                             "SELECT id FROM fordonsmodeller WHERE marke=? AND modell=? AND (arsmodell=? OR (arsmodell IS NULL AND ? IS NULL))",
                             (marke, modell, ar, ar)
                         ).fetchone()
-                    if not befintlig:
-                        with get_db() as conn:
-                            cur = conn.execute(
+                        if not befintlig:
+                            cur2 = conn.execute(
                                 "INSERT INTO fordonsmodeller (marke, modell, arsmodell) VALUES (?,?,?)",
                                 (marke, modell, ar)
                             )
-                            fm_id = cur.lastrowid
-                        for t, info in iv_dict.items():
-                            with get_db() as conn:
+                            fm_id = cur2.lastrowid
+                            for t, info in iv_dict.items():
                                 conn.execute(
                                     "INSERT OR REPLACE INTO fordonsmodell_intervall (fordonsmodell_id, service_typ, intervall_km, aktiv) VALUES (?,?,?,?)",
                                     (fm_id, t, info.get("intervall"), 1 if info.get("aktiv") else 0)
                                 )
+
                     return redirect(url_for("index"))
                 except sqlite3.IntegrityError:
                     error = f"Reg.nr {regnr} finns redan i systemet."
@@ -773,7 +786,6 @@ def arbetsorder():
     bilar_data = []
     for bil_id in bil_ids:
         bil_id = int(bil_id)
-        # Kontrollera access utan abort — skippa tysta om fel verkstad
         with get_db() as conn:
             b = conn.execute("SELECT * FROM bilar WHERE id=?", (bil_id,)).fetchone()
         if not b:
@@ -829,27 +841,27 @@ def ny_fordonsmodell():
             error = "Märke och modell är obligatoriska."
         else:
             try:
+                ar = int(arsmodell) if arsmodell.isdigit() else None
+                # FIX #4 pattern: en connection för hela operationen
                 with get_db() as conn:
                     cur = conn.execute(
                         "INSERT INTO fordonsmodeller (marke, modell, arsmodell) VALUES (?,?,?)",
-                        (marke, modell, int(arsmodell) if arsmodell.isdigit() else None)
+                        (marke, modell, ar)
                     )
                     fm_id = cur.lastrowid
-                for t in NEDRAKNARE_TYPER:
-                    aktiv = request.form.get(f"aktiv_{t}") == "1"
-                    iv_str = request.form.get(f"iv_{t}","").strip()
-                    iv_km = int(iv_str) if iv_str.isdigit() else None
-                    with get_db() as conn:
+                    for t in NEDRAKNARE_TYPER:
+                        aktiv = request.form.get(f"aktiv_{t}") == "1"
+                        iv_str = request.form.get(f"iv_{t}","").strip()
+                        iv_km = int(iv_str) if iv_str.isdigit() else None
                         conn.execute(
                             "INSERT OR REPLACE INTO fordonsmodell_intervall (fordonsmodell_id, service_typ, intervall_km, aktiv) VALUES (?,?,?,?)",
                             (fm_id, t, iv_km, 1 if aktiv else 0)
                         )
-                egna_namn = request.form.getlist("egen_namn")
-                egna_km   = request.form.getlist("egen_km")
-                for namn, km_str in zip(egna_namn, egna_km):
-                    namn = namn.strip()
-                    if namn and km_str.strip().isdigit():
-                        with get_db() as conn:
+                    egna_namn = request.form.getlist("egen_namn")
+                    egna_km   = request.form.getlist("egen_km")
+                    for namn, km_str in zip(egna_namn, egna_km):
+                        namn = namn.strip()
+                        if namn and km_str.strip().isdigit():
                             conn.execute(
                                 "INSERT OR REPLACE INTO fordonsmodell_intervall (fordonsmodell_id, service_typ, intervall_km, aktiv) VALUES (?,?,?,?)",
                                 (fm_id, namn, int(km_str), 1)
@@ -884,48 +896,47 @@ def redigera_fordonsmodell(fm_id):
         if not marke or not modell:
             error = "Märke och modell är obligatoriska."
         else:
+            ar = int(arsmodell) if arsmodell.isdigit() else None
+            iv_dict = {}
+            # FIX #4 pattern: en connection för hela uppdateringen
             with get_db() as conn:
                 conn.execute(
                     "UPDATE fordonsmodeller SET marke=?, modell=?, arsmodell=? WHERE id=?",
-                    (marke, modell, int(arsmodell) if arsmodell.isdigit() else None, fm_id)
+                    (marke, modell, ar, fm_id)
                 )
-            iv_dict = {}
-            for t in NEDRAKNARE_TYPER:
-                aktiv = request.form.get(f"aktiv_{t}") == "1"
-                iv_str = request.form.get(f"iv_{t}","").strip()
-                iv_km = int(iv_str) if iv_str.isdigit() else None
-                iv_dict[t] = {"intervall": iv_km, "aktiv": aktiv}
-                with get_db() as conn:
+                for t in NEDRAKNARE_TYPER:
+                    aktiv = request.form.get(f"aktiv_{t}") == "1"
+                    iv_str = request.form.get(f"iv_{t}","").strip()
+                    iv_km = int(iv_str) if iv_str.isdigit() else None
+                    iv_dict[t] = {"intervall": iv_km, "aktiv": aktiv}
                     conn.execute(
                         "INSERT OR REPLACE INTO fordonsmodell_intervall (fordonsmodell_id, service_typ, intervall_km, aktiv) VALUES (?,?,?,?)",
                         (fm_id, t, iv_km, 1 if aktiv else 0)
                     )
-            with get_db() as conn:
+                # Ta bort gamla egna typer
                 conn.execute(
                     "DELETE FROM fordonsmodell_intervall WHERE fordonsmodell_id=? AND service_typ NOT IN ({})".format(
                         ",".join("?" * len(NEDRAKNARE_TYPER))
                     ), [fm_id] + NEDRAKNARE_TYPER
                 )
-            egna_namn = request.form.getlist("egen_namn")
-            egna_km   = request.form.getlist("egen_km")
-            for namn, km_str in zip(egna_namn, egna_km):
-                namn = namn.strip()
-                if namn and km_str.strip().isdigit():
-                    iv_dict[namn] = {"intervall": int(km_str), "aktiv": True}
-                    with get_db() as conn:
+                egna_namn = request.form.getlist("egen_namn")
+                egna_km   = request.form.getlist("egen_km")
+                for namn, km_str in zip(egna_namn, egna_km):
+                    namn = namn.strip()
+                    if namn and km_str.strip().isdigit():
+                        iv_dict[namn] = {"intervall": int(km_str), "aktiv": True}
                         conn.execute(
                             "INSERT OR REPLACE INTO fordonsmodell_intervall (fordonsmodell_id, service_typ, intervall_km, aktiv) VALUES (?,?,?,?)",
                             (fm_id, namn, int(km_str), 1)
                         )
-            ar = int(arsmodell) if arsmodell.isdigit() else None
+            # Synka alla bilar av samma märke + modell + årsmodell
             with get_db() as conn:
                 bilar = conn.execute(
                     "SELECT id FROM bilar WHERE marke=? AND modell=? AND (arsmodell=? OR (arsmodell IS NULL AND ? IS NULL))",
                     (marke, modell, ar, ar)
                 ).fetchall()
-            for b in bilar:
-                for t, info in iv_dict.items():
-                    with get_db() as conn:
+                for b in bilar:
+                    for t, info in iv_dict.items():
                         conn.execute("""
                             INSERT INTO serviceintervall (bil_id, service_typ, intervall_km, aktiv)
                             VALUES (?,?,?,?)
@@ -995,7 +1006,6 @@ def importera_miltal():
 @app.route("/exportera")
 @login_required
 def exportera_data():
-    """Exporterar all fordonsdata för verkstaden som CSV. Tillgänglig även för pausade konton."""
     import io
     vid = current_user.verkstad_id
     with get_db() as conn:
@@ -1067,7 +1077,6 @@ def login():
                 with get_db() as conn2:
                     v = conn2.execute("SELECT slug FROM verkstader WHERE id=?", (row["verkstad_id"],)).fetchone()
                     slug = v["slug"] if v else None
-            # Uppdatera senaste inloggning
             with get_db() as conn2:
                 conn2.execute("UPDATE anvandare SET senaste_inloggning=? WHERE id=?",
                     (datetime.now().strftime("%Y-%m-%d %H:%M"), row["id"]))
@@ -1132,7 +1141,6 @@ def ny_anvandare():
     vid      = current_user.verkstad_id
     if not (username and namn and password):
         return redirect(url_for("admin"))
-    # Kontrollera seat-gräns
     if vid is not None:
         with get_db() as conn:
             v = conn.execute("SELECT paket FROM verkstader WHERE id=?", (vid,)).fetchone()
@@ -1222,7 +1230,7 @@ def superadmin_login():
         registrera_misslyckat(ip, _sa_login_attempts)
         forsok_kvar = MAX_ATTEMPTS - len(_sa_login_attempts[ip])
         if forsok_kvar <= 0:
-            error = f"För många försök. Kontot är låst i 15 minuter."
+            error = "För många försök. Kontot är låst i 15 minuter."
         else:
             error = f"Fel lösenord. {forsok_kvar} försök kvar."
     return render_template("superadmin_login.html", error=error)
