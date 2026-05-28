@@ -84,7 +84,7 @@ def load_user(user_id):
     return User(row["id"], row["username"], row["namn"], row["roll"], row["verkstad_id"], slug)
 
 # ── HJÄLPFUNKTIONER ───────────────────────────────────────────────────────────
-BACKUP_DIR = os.path.join(os.path.dirname(__file__), "säkerhetskopior")
+BACKUP_DIR = os.environ.get("BACKUP_DIR", "/home/data/säkerhetskopior")
 
 SERVICE_TYPER = [
     "Oljebyte", "Kamrem",
