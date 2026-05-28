@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Paketinställningar – RevvBase</title>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;900&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:#0f1113;color:#e8eaec;font-family:'Barlow',sans-serif;min-height:100vh}
+    .nav{display:flex;align-items:center;justify-content:space-between;padding:1rem 2rem;background:#181b1e;border-bottom:1px solid #2e3338}
+    .logo{font-family:'Barlow Condensed',sans-serif;font-size:1.4rem;font-weight:900;color:#f0a500}
+    .nav-right{display:flex;align-items:center;gap:1rem}
+    .btn-back{background:transparent;color:#7a8490;border:1px solid #2e3338;border-radius:6px;padding:.35rem .9rem;font-size:.85rem;cursor:pointer;text-decoration:none}
+    .main{max-width:800px;margin:0 auto;padding:2rem 1.5rem}
+    .page-title{font-family:'Barlow Condensed',sans-serif;font-size:2rem;font-weight:900;margin-bottom:0.5rem}
+    .page-sub{font-size:.9rem;color:#7a8490;margin-bottom:2rem}
+    .paket-grid{display:flex;flex-direction:column;gap:1.5rem}
+    .paket-kort{background:#181b1e;border:1px solid #2e3338;border-radius:10px;padding:1.5rem}
+    .paket-kort--bas{border-top:3px solid #4488bb}
+    .paket-kort--standard{border-top:3px solid #f0a500}
+    .paket-kort--pro{border-top:3px solid #4cd97a}
+    .paket-namn{font-family:'Barlow Condensed',sans-serif;font-size:1.4rem;font-weight:900;margin-bottom:1.25rem;text-transform:uppercase;letter-spacing:.06em}
+    .paket-namn--bas{color:#88bbdd}
+    .paket-namn--standard{color:#f0a500}
+    .paket-namn--pro{color:#4cd97a}
+    .paket-rad{display:grid;grid-template-columns:1fr 160px 160px;gap:1rem;align-items:center;margin-bottom:1rem}
+    .paket-label{font-size:.85rem;font-weight:600;color:#7a8490;text-transform:uppercase;letter-spacing:.04em}
+    .input-wrap{display:flex;align-items:center;gap:.5rem}
+    .form-input{background:#22262b;border:1px solid #2e3338;border-radius:6px;color:#e8eaec;padding:.55rem .75rem;font-size:.95rem;width:100%}
+    .form-input:focus{outline:none;border-color:#f0a500}
+    .form-input:disabled{opacity:.35;cursor:not-allowed}
+    .checkbox-wrap{display:flex;align-items:center;gap:.5rem;font-size:.82rem;color:#7a8490;white-space:nowrap}
+    .checkbox-wrap input{accent-color:#f0a500;width:15px;height:15px;cursor:pointer}
+    .pris-wrap{display:flex;align-items:center;gap:.5rem}
+    .pris-suffix{font-size:.82rem;color:#7a8490;white-space:nowrap}
+    .btn-primary{background:#f0a500;color:#000;border:none;border-radius:6px;padding:.65rem 2rem;font-weight:700;font-size:1rem;cursor:pointer;margin-top:1rem}
+    .btn-primary:hover{background:#ffbb33}
+    @media(max-width:600px){.paket-rad{grid-template-columns:1fr;gap:.5rem}}
+  </style>
+</head>
+<body>
+<nav class="nav">
+  <div class="logo">⚙ REVVBASE ADMIN</div>
+  <div class="nav-right">
+    <a href="/superadmin" class="btn-back">← Tillbaka</a>
+  </div>
+</nav>
+
+<div class="main">
+  <div class="page-title">Paketinställningar</div>
+  <div class="page-sub">Ändringar gäller direkt för alla verkstäder med respektive paket.</div>
+
+  <form method="post" class="paket-grid">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    {% for paket_namn, färg in [("bas", "bas"), ("standard", "standard"), ("pro", "pro")] %}
+    {% set p = paket.get(paket_namn, {}) %}
+    <div class="paket-kort paket-kort--{{ färg }}">
+      <div class="paket-namn paket-namn--{{ färg }}">{{ paket_namn }}</div>
+
+      <div class="paket-rad">
+        <div class="paket-label">Pris</div>
+        <div class="pris-wrap">
+          <input class="form-input" type="number" name="{{ paket_namn }}_pris"
+                 value="{{ p.pris if p else 0 }}" min="0" style="max-width:120px">
+          <span class="pris-suffix">kr/mån</span>
+        </div>
+        <div></div>
+      </div>
+
+      <div class="paket-rad">
+        <div class="paket-label">Max användare</div>
+        <input class="form-input" type="number"
+               name="{{ paket_namn }}_max_anvandare"
+               id="{{ paket_namn }}_max_anvandare"
+               value="{{ p.max_anvandare if p else 1 }}" min="1"
+               {% if p and p.obegransad_anvandare %}disabled{% endif %}>
+        <div class="checkbox-wrap">
+          <input type="checkbox"
+                 name="{{ paket_namn }}_obegransad_anvandare"
+                 id="{{ paket_namn }}_obeg_anv"
+                 value="1"
+                 {% if p and p.obegransad_anvandare %}checked{% endif %}
+                 onchange="toggleObeg('{{ paket_namn }}_max_anvandare', '{{ paket_namn }}_anv_visa', this)">
+          Obegränsat
+          <span id="{{ paket_namn }}_anv_visa" style="color:#e8eaec;font-weight:700;{% if not (p and p.obegransad_anvandare) %}display:none{% endif %}">–</span>
+        </div>
+      </div>
+
+      <div class="paket-rad">
+        <div class="paket-label">Max bilar</div>
+        <input class="form-input" type="number"
+               name="{{ paket_namn }}_max_bilar"
+               id="{{ paket_namn }}_max_bilar"
+               value="{{ p.max_bilar if p else 5 }}" min="1"
+               {% if p and p.obegransad_bilar %}disabled{% endif %}>
+        <div class="checkbox-wrap">
+          <input type="checkbox"
+                 name="{{ paket_namn }}_obegransad_bilar"
+                 id="{{ paket_namn }}_obeg_bil"
+                 value="1"
+                 {% if p and p.obegransad_bilar %}checked{% endif %}
+                 onchange="toggleObeg('{{ paket_namn }}_max_bilar', '{{ paket_namn }}_bil_visa', this)">
+          Obegränsat
+          <span id="{{ paket_namn }}_bil_visa" style="color:#e8eaec;font-weight:700;{% if not (p and p.obegransad_bilar) %}display:none{% endif %}">–</span>
+        </div>
+      </div>
+
+    </div>
+    {% endfor %}
+
+    <div>
+      <button type="submit" class="btn-primary">💾 Spara paketinställningar</button>
+    </div>
+  </form>
+</div>
+
+<script>
+function toggleObeg(inputId, visaId, cb) {
+  var inp = document.getElementById(inputId);
+  var visa = document.getElementById(visaId);
+  inp.disabled = cb.checked;
+  visa.style.display = cb.checked ? 'inline' : 'none';
+}
+</script>
+</body>
+</html>
