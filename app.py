@@ -386,6 +386,53 @@ def daglig_backup():
 
 # ── ROUTES ───────────────────────────────────────────────────────────────────
 
+@app.route("/superadmin/backup", methods=["POST"])
+def superadmin_backup():
+    if not session.get("superadmin"):
+        return redirect(url_for("superadmin_login"))
+    verkstad_id = request.form.get("verkstad_id")
+    idag = datetime.now().strftime("%Y-%m-%d")
+    try:
+        with get_db() as conn:
+            if verkstad_id:
+                verkstader = conn.execute("SELECT id, slug FROM verkstader WHERE id=?", (verkstad_id,)).fetchall()
+            else:
+                verkstader = conn.execute("SELECT id, slug FROM verkstader").fetchall()
+        for v in verkstader:
+            slug = v["slug"]
+            vid = v["id"]
+            mapp = os.path.join(BACKUP_DIR, slug)
+            os.makedirs(mapp, exist_ok=True)
+            fil = os.path.join(mapp, f"{idag}.csv")
+            if os.path.exists(fil):
+                os.remove(fil)
+            with get_db() as conn:
+                bilar = conn.execute(
+                    "SELECT id, regnr, fordonsnummer, marke, modell, arsmodell, notering FROM bilar WHERE verkstad_id=?",
+                    (vid,)
+                ).fetchall()
+                handelser = conn.execute("""
+                    SELECT h.*, b.regnr, b.fordonsnummer, b.marke, b.modell
+                    FROM handelser h
+                    JOIN bilar b ON h.bil_id = b.id
+                    WHERE b.verkstad_id = ?
+                """, (vid,)).fetchall()
+            with open(fil, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["## BILAR"])
+                writer.writerow(["id","regnr","fordonsnummer","marke","modell","arsmodell","notering"])
+                for b in bilar:
+                    writer.writerow([b["id"], b["regnr"], b["fordonsnummer"], b["marke"], b["modell"], b["arsmodell"], b["notering"]])
+                writer.writerow([])
+                writer.writerow(["## HÄNDELSER"])
+                writer.writerow(["id","bil_id","regnr","fordonsnummer","marke","modell","datum","km","typ","service_typer","beskrivning"])
+                for h in handelser:
+                    writer.writerow([h["id"], h["bil_id"], h["regnr"], h["fordonsnummer"], h["marke"], h["modell"], h["datum"], h["km"], h["typ"], h["service_typer"], h["beskrivning"]])
+    except Exception as e:
+        return redirect(url_for("superadmin", msg=f"Backup fel: {e}"))
+    return redirect(url_for("superadmin", msg="✓ Backup klar!"))
+
+
 @app.route("/")
 def landing():
     if current_user.is_authenticated:

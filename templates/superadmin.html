@@ -23,8 +23,11 @@
     .stat-value.gold{color:#f0a500}
     .section-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:1rem}
     .section-title{font-family:'Barlow Condensed',sans-serif;font-size:1.4rem;font-weight:700}
+    .section-header-btns{display:flex;gap:0.5rem;align-items:center;}
     .btn-primary{background:#f0a500;color:#000;border:none;border-radius:6px;padding:.5rem 1.2rem;font-weight:700;font-size:.9rem;cursor:pointer;text-decoration:none}
     .btn-primary:hover{background:#ffbb33}
+    .btn-ghost{background:transparent;color:#7a8490;border:1px solid #2e3338;border-radius:6px;padding:.5rem 1.2rem;font-weight:600;font-size:.9rem;cursor:pointer}
+    .btn-ghost:hover{color:#e8eaec;border-color:#555}
     .table-wrap{background:#181b1e;border:1px solid #2e3338;border-radius:10px;overflow:hidden}
     table{width:100%;border-collapse:collapse}
     th{background:#22262b;font-size:.72rem;color:#7a8490;text-transform:uppercase;letter-spacing:.06em;padding:.75rem 1rem;text-align:left}
@@ -43,8 +46,11 @@
     .btn-pause{background:#3d2a00;color:#f0a500;border:1px solid #5c3d00}
     .btn-unpause{background:#0d2b1a;color:#4cd97a;border:1px solid #1a4d2b}
     .btn-danger{background:#2b0d0d;color:#e05050;border:1px solid #4d1a1a}
+    .btn-backup{background:#1a2b3d;color:#88bbdd;border:1px solid #1e3a5c}
+    .btn-backup:hover{border-color:#4488bb;color:#aaddff}
     .last-login{font-size:.75rem;color:#7a8490}
-    .last-login.recent{color:#4cd97a}
+    .alert-success{background:#0d2b1a;border:1px solid #1e4d2b;color:#6eff9f;padding:.75rem 1rem;border-radius:6px;margin-bottom:1rem}
+    .alert-error{background:#2b0d0d;border:1px solid #4d1a1a;color:#ff8080;padding:.75rem 1rem;border-radius:6px;margin-bottom:1rem}
     .modal-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:100;align-items:center;justify-content:center}
     .modal-overlay.active{display:flex}
     .modal{background:#181b1e;border:1px solid #2e3338;border-radius:10px;padding:2rem;width:100%;max-width:460px}
@@ -56,7 +62,7 @@
     select.form-input{cursor:pointer}
     .form-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
     .modal-btns{display:flex;justify-content:space-between;margin-top:1.5rem}
-    .btn-ghost{background:transparent;color:#7a8490;border:1px solid #2e3338;border-radius:6px;padding:.5rem 1.2rem;font-size:.9rem;cursor:pointer}
+    .btn-ghost-modal{background:transparent;color:#7a8490;border:1px solid #2e3338;border-radius:6px;padding:.5rem 1.2rem;font-size:.9rem;cursor:pointer}
     @media(max-width:700px){.stats{grid-template-columns:repeat(3,1fr)}.form-row{grid-template-columns:1fr}}
   </style>
 </head>
@@ -70,6 +76,15 @@
 </nav>
 
 <div class="main">
+
+  {% if request.args.get('msg') %}
+    {% if 'fel' in request.args.get('msg') | lower %}
+    <div class="alert-error">{{ request.args.get('msg') }}</div>
+    {% else %}
+    <div class="alert-success">{{ request.args.get('msg') }}</div>
+    {% endif %}
+  {% endif %}
+
   <div class="stats">
     <div class="stat-card"><div class="stat-label">Totalt kunder</div><div class="stat-value gold">{{ totalt }}</div></div>
     <div class="stat-card"><div class="stat-label">Aktiva</div><div class="stat-value green">{{ aktiva }}</div></div>
@@ -81,7 +96,13 @@
 
   <div class="section-header">
     <div class="section-title">Kundkonton</div>
-    <button class="btn-primary" onclick="oppnaModal('nyModal')">+ Lägg till kund</button>
+    <div class="section-header-btns">
+      <form method="post" action="/superadmin/backup">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn-ghost">💾 Backup alla</button>
+      </form>
+      <button class="btn-primary" onclick="oppnaModal('nyModal')">+ Lägg till kund</button>
+    </div>
   </div>
 
   <div class="table-wrap">
@@ -121,6 +142,11 @@
           <td>{{ v.antal_bilar }}</td>
           <td style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;">
             <button class="btn-sm btn-edit" onclick="oppnaRedigera({{ v.id }}, '{{ v.namn }}', '{{ v.slug }}', '{{ v.admin_email }}', '{{ v.paket }}')">Redigera</button>
+            <form method="post" action="/superadmin/backup" style="display:inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="verkstad_id" value="{{ v.id }}">
+              <button type="submit" class="btn-sm btn-backup" title="Backup {{ v.namn }}">💾</button>
+            </form>
             <form method="post" action="/superadmin/pausa/{{ v.id }}" style="display:inline">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button type="submit" class="btn-sm {% if v.status == 'aktiv' %}btn-pause{% else %}btn-unpause{% endif %}">
@@ -176,7 +202,7 @@
         </div>
       </div>
       <div class="modal-btns">
-        <button type="button" class="btn-ghost" onclick="stangModal('nyModal')">Avbryt</button>
+        <button type="button" class="btn-ghost-modal" onclick="stangModal('nyModal')">Avbryt</button>
         <button type="submit" class="btn-primary">Skapa kund</button>
       </div>
     </form>
@@ -212,7 +238,7 @@
         </select>
       </div>
       <div class="modal-btns">
-        <button type="button" class="btn-ghost" onclick="stangModal('redigeraModal')">Avbryt</button>
+        <button type="button" class="btn-ghost-modal" onclick="stangModal('redigeraModal')">Avbryt</button>
         <button type="submit" class="btn-primary">Spara ändringar</button>
       </div>
     </form>
@@ -234,7 +260,6 @@ function oppnaRedigera(vid, namn, slug, email, paket) {
   document.getElementById('redigeraForm').action = '/superadmin/redigera/' + vid;
   oppnaModal('redigeraModal');
 }
-// Stäng modal vid klick utanför
 document.querySelectorAll('.modal-overlay').forEach(function(el) {
   el.addEventListener('click', function(e) {
     if (e.target === el) el.classList.remove('active');
