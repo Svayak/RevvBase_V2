@@ -161,7 +161,7 @@ def init_db():
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS bilar (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                regnr TEXT NOT NULL UNIQUE,
+                regnr TEXT NOT NULL,
                 fordonsnummer TEXT,
                 marke TEXT NOT NULL,
                 modell TEXT NOT NULL,
@@ -255,6 +255,26 @@ def init_db():
         try:
             conn.execute("ALTER TABLE anvandare ADD COLUMN senaste_inloggning TEXT")
         except: pass
+        # Migration: byt UNIQUE(regnr) mot UNIQUE(regnr, verkstad_id)
+        try:
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS bilar_ny (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    regnr TEXT NOT NULL,
+                    fordonsnummer TEXT,
+                    marke TEXT NOT NULL,
+                    modell TEXT NOT NULL,
+                    arsmodell INTEGER,
+                    notering TEXT,
+                    verkstad_id INTEGER,
+                    UNIQUE(regnr, verkstad_id)
+                );
+                INSERT OR IGNORE INTO bilar_ny SELECT * FROM bilar;
+                DROP TABLE bilar;
+                ALTER TABLE bilar_ny RENAME TO bilar;
+            """)
+        except Exception as e:
+            print(f"Migration bilar: {e}")
 
 def get_fordonsmodell_intervall(marke, modell, arsmodell):
     with get_db() as conn:
