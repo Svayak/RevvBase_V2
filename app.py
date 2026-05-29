@@ -225,7 +225,7 @@ def init_db():
                 marke TEXT NOT NULL,
                 modell TEXT NOT NULL,
                 arsmodell INTEGER,
-                UNIQUE(marke, modell, arsmodell)
+                verkstad_id INTEGER
             );
             CREATE TABLE IF NOT EXISTS fordonsmodell_intervall (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -290,6 +290,10 @@ def init_db():
             """)
         except Exception as e:
             print(f"Migration bilar: {e}")
+        # Migration: lägg till verkstad_id i fordonsmodeller om den saknas
+        try:
+            conn.execute("ALTER TABLE fordonsmodeller ADD COLUMN verkstad_id INTEGER")
+        except: pass
         # Skapa paketinstallningar om den saknas
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS paketinstallningar (
@@ -308,12 +312,18 @@ def init_db():
                 ('pro', 9999, 9999, 1, 1, 999);
         """)
 
-def get_fordonsmodell_intervall(marke, modell, arsmodell):
+def get_fordonsmodell_intervall(marke, modell, arsmodell, verkstad_id=None):
     with get_db() as conn:
-        fm = conn.execute(
-            "SELECT id FROM fordonsmodeller WHERE marke=? AND modell=? AND (arsmodell=? OR arsmodell IS NULL) ORDER BY arsmodell DESC LIMIT 1",
-            (marke, modell, arsmodell)
-        ).fetchone()
+        if verkstad_id is not None:
+            fm = conn.execute(
+                "SELECT id FROM fordonsmodeller WHERE marke=? AND modell=? AND (arsmodell=? OR arsmodell IS NULL) AND verkstad_id=? ORDER BY arsmodell DESC LIMIT 1",
+                (marke, modell, arsmodell, verkstad_id)
+            ).fetchone()
+        else:
+            fm = conn.execute(
+                "SELECT id FROM fordonsmodeller WHERE marke=? AND modell=? AND (arsmodell=? OR arsmodell IS NULL) AND verkstad_id IS NULL ORDER BY arsmodell DESC LIMIT 1",
+                (marke, modell, arsmodell)
+            ).fetchone()
         if not fm:
             return {}
         rader = conn.execute(
@@ -322,9 +332,9 @@ def get_fordonsmodell_intervall(marke, modell, arsmodell):
         ).fetchall()
     return {r["service_typ"]: {"intervall": r["intervall_km"], "aktiv": bool(r["aktiv"])} for r in rader}
 
-def get_intervall(bil_id, marke, modell, arsmodell=None):
+def get_intervall(bil_id, marke, modell, arsmodell=None, verkstad_id=None):
     nyckel = f"{marke} {modell}"
-    fm_intervall = get_fordonsmodell_intervall(marke, modell, arsmodell)
+    fm_intervall = get_fordonsmodell_intervall(marke, modell, arsmodell, verkstad_id)
     standard = fm_intervall if fm_intervall else STANDARD_INTERVALL.get(nyckel, {})
     with get_db() as conn:
         rader = conn.execute(
@@ -363,8 +373,8 @@ def spara_intervall(bil_id, intervall_dict):
                 ON CONFLICT(bil_id, service_typ) DO UPDATE SET intervall_km=excluded.intervall_km, aktiv=excluded.aktiv
             """, (bil_id, typ, info.get("intervall"), 1 if info.get("aktiv") else 0))
 
-def bygg_panel(bil_id, marke, modell, handelser, senaste_km, arsmodell=None):
-    intervaller = get_intervall(bil_id, marke, modell, arsmodell)
+def bygg_panel(bil_id, marke, modell, handelser, senaste_km, arsmodell=None, verkstad_id=None):
+    intervaller = get_intervall(bil_id, marke, modell, arsmodell, verkstad_id)
     senaste_per_typ = {}
     for h in handelser:
         if h["service_typer"]:
@@ -638,13 +648,13 @@ def ny_bil():
 
                     with get_db() as conn:
                         befintlig = conn.execute(
-                            "SELECT id FROM fordonsmodeller WHERE marke=? AND modell=? AND (arsmodell=? OR (arsmodell IS NULL AND ? IS NULL))",
-                            (marke, modell, ar, ar)
+                            "SELECT id FROM fordonsmodeller WHERE marke=? AND modell=? AND (arsmodell=? OR (arsmodell IS NULL AND ? IS NULL)) AND verkstad_id IS ?",
+                            (marke, modell, ar, ar, vid)
                         ).fetchone()
                         if not befintlig:
                             cur2 = conn.execute(
-                                "INSERT INTO fordonsmodeller (marke, modell, arsmodell) VALUES (?,?,?)",
-                                (marke, modell, ar)
+                                "INSERT INTO fordonsmodeller (marke, modell, arsmodell, verkstad_id) VALUES (?,?,?,?)",
+                                (marke, modell, ar, vid)
                             )
                             fm_id = cur2.lastrowid
                             for t, info in iv_dict.items():
@@ -683,7 +693,7 @@ def bil(bil_id):
         ).fetchall()
 
     senaste_km = alla_handelser[0]["km"] if alla_handelser else None
-    panel = bygg_panel(bil_id, b["marke"], b["modell"], alla_handelser, senaste_km)
+    panel = bygg_panel(bil_id, b["marke"], b["modell"], alla_handelser, senaste_km, b["arsmodell"], b["verkstad_id"])
     return render_template("bil.html", bil=b, handelser=handelser,
         panel=panel, senaste_km=senaste_km,
         service_typer=SERVICE_TYPER, filter_typ=filter_typ,
@@ -693,7 +703,7 @@ def bil(bil_id):
 @login_required
 def redigera_bil(bil_id):
     b = check_bil_access(bil_id)
-    intervaller = get_intervall(bil_id, b["marke"], b["modell"])
+    intervaller = get_intervall(bil_id, b["marke"], b["modell"], b["arsmodell"], b["verkstad_id"])
     error = None
     if request.method == "POST":
         marke         = request.form.get("marke","").strip()
@@ -730,7 +740,7 @@ def redigera_bil(bil_id):
 @login_required
 def ny_handelse(bil_id):
     b = check_bil_access(bil_id)
-    intervaller = get_intervall(bil_id, b["marke"], b["modell"])
+    intervaller = get_intervall(bil_id, b["marke"], b["modell"], b["arsmodell"], b["verkstad_id"])
     egna_typer = [t for t in intervaller if t not in NEDRAKNARE_TYPER and intervaller[t].get("aktiv")]
     alla_service_typer = SERVICE_TYPER + [t for t in egna_typer if t not in SERVICE_TYPER]
     steg = request.args.get("steg", "1")
@@ -886,7 +896,7 @@ def kommande():
         senaste_km = handelser[0]["km"] if handelser else None
         if senaste_km is None:
             continue
-        panel = bygg_panel(b["id"], b["marke"], b["modell"], handelser, senaste_km, b["arsmodell"])
+        panel = bygg_panel(b["id"], b["marke"], b["modell"], handelser, senaste_km, b["arsmodell"], b["verkstad_id"])
         atgarder = []
         for typ, info in panel.items():
             diff = info["diff"]
@@ -927,7 +937,7 @@ def arbetsorder():
         senaste_km = handelser[0]["km"] if handelser else None
         if senaste_km is None:
             continue
-        panel = bygg_panel(bil_id, b["marke"], b["modell"], handelser, senaste_km, b["arsmodell"])
+        panel = bygg_panel(bil_id, b["marke"], b["modell"], handelser, senaste_km, b["arsmodell"], b["verkstad_id"])
         atgarder = []
         for typ, info in panel.items():
             diff = info["diff"]
@@ -969,10 +979,11 @@ def ny_fordonsmodell():
         else:
             try:
                 ar = int(arsmodell) if arsmodell.isdigit() else None
+                vid = current_user.verkstad_id
                 with get_db() as conn:
                     cur = conn.execute(
-                        "INSERT INTO fordonsmodeller (marke, modell, arsmodell) VALUES (?,?,?)",
-                        (marke, modell, ar)
+                        "INSERT INTO fordonsmodeller (marke, modell, arsmodell, verkstad_id) VALUES (?,?,?,?)",
+                        (marke, modell, ar, vid)
                     )
                     fm_id = cur.lastrowid
                     for t in NEDRAKNARE_TYPER:
@@ -1005,8 +1016,12 @@ def ny_fordonsmodell():
 @app.route("/fordonsbibliotek/<int:fm_id>/redigera", methods=["GET","POST"])
 @login_required
 def redigera_fordonsmodell(fm_id):
+    vid = current_user.verkstad_id
     with get_db() as conn:
-        fm = conn.execute("SELECT * FROM fordonsmodeller WHERE id=?", (fm_id,)).fetchone()
+        if vid is not None:
+            fm = conn.execute("SELECT * FROM fordonsmodeller WHERE id=? AND verkstad_id=?", (fm_id, vid)).fetchone()
+        else:
+            fm = conn.execute("SELECT * FROM fordonsmodeller WHERE id=? AND verkstad_id IS NULL", (fm_id,)).fetchone()
         iv_rader = conn.execute(
             "SELECT service_typ, intervall_km, aktiv FROM fordonsmodell_intervall WHERE fordonsmodell_id=?", (fm_id,)
         ).fetchall()
@@ -1054,10 +1069,16 @@ def redigera_fordonsmodell(fm_id):
                             (fm_id, namn, int(km_str), 1)
                         )
             with get_db() as conn:
-                bilar = conn.execute(
-                    "SELECT id FROM bilar WHERE marke=? AND modell=? AND (arsmodell=? OR (arsmodell IS NULL AND ? IS NULL))",
-                    (marke, modell, ar, ar)
-                ).fetchall()
+                if vid is not None:
+                    bilar = conn.execute(
+                        "SELECT id FROM bilar WHERE marke=? AND modell=? AND (arsmodell=? OR (arsmodell IS NULL AND ? IS NULL)) AND verkstad_id=?",
+                        (marke, modell, ar, ar, vid)
+                    ).fetchall()
+                else:
+                    bilar = conn.execute(
+                        "SELECT id FROM bilar WHERE marke=? AND modell=? AND (arsmodell=? OR (arsmodell IS NULL AND ? IS NULL))",
+                        (marke, modell, ar, ar)
+                    ).fetchall()
                 for b in bilar:
                     for t, info in iv_dict.items():
                         conn.execute("""
@@ -1072,9 +1093,15 @@ def redigera_fordonsmodell(fm_id):
 @app.route("/fordonsbibliotek/<int:fm_id>/ta-bort", methods=["POST"])
 @login_required
 def ta_bort_fordonsmodell(fm_id):
+    vid = current_user.verkstad_id
     with get_db() as conn:
-        conn.execute("DELETE FROM fordonsmodell_intervall WHERE fordonsmodell_id=?", (fm_id,))
-        conn.execute("DELETE FROM fordonsmodeller WHERE id=?", (fm_id,))
+        if vid is not None:
+            fm = conn.execute("SELECT id FROM fordonsmodeller WHERE id=? AND verkstad_id=?", (fm_id, vid)).fetchone()
+        else:
+            fm = conn.execute("SELECT id FROM fordonsmodeller WHERE id=? AND verkstad_id IS NULL", (fm_id,)).fetchone()
+        if fm:
+            conn.execute("DELETE FROM fordonsmodell_intervall WHERE fordonsmodell_id=?", (fm_id,))
+            conn.execute("DELETE FROM fordonsmodeller WHERE id=?", (fm_id,))
     return redirect(url_for("fordonsbibliotek"))
 
 @app.route("/importera-miltal", methods=["GET","POST"])
