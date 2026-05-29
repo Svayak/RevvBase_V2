@@ -5,23 +5,63 @@
   <h1 class="page-title">Användare</h1>
 </div>
 
-{% set paket_seats = {"bas": 1, "standard": 5, "pro": 9999} %}
-{% set max_seats = paket_seats.get(verkstad_paket, 1) %}
+{% set max_seats = paket_limits.max_anvandare if not paket_limits.obegransad_anvandare else 999999 %}
 {% set seats_kvar = max_seats - anvandare|length %}
+
+{% if error %}
+  {% if error.startswith("PAKET_FULLT") %}
+  <!-- Modal: paketgräns nådd -->
+  <div style="
+    position:fixed; top:0; left:0; right:0; bottom:0;
+    background:rgba(0,0,0,0.75); z-index:200;
+    display:flex; align-items:center; justify-content:center;
+  " id="paketModal">
+    <div style="
+      background:#181b1e; border:2px solid #f0a500;
+      border-radius:12px; padding:2.5rem 2rem; max-width:440px; width:90%;
+      text-align:center; box-shadow:0 8px 40px rgba(0,0,0,0.6);
+    ">
+      <div style="font-size:3rem; margin-bottom:1rem;">🔒</div>
+      <h2 style="font-family:var(--font-head); font-size:1.8rem; margin-bottom:0.75rem; color:#f0a500;">
+        Platserna är fulla
+      </h2>
+      <p style="color:var(--text-muted); font-size:0.95rem; line-height:1.7; margin-bottom:1.75rem;">
+        Ditt <strong style="color:var(--text)">{{ verkstad_paket | capitalize }}-paket</strong>
+        tillåter maximalt
+        <strong style="color:var(--text)">{{ error.split(":")[2] }} användare</strong>.
+        <br><br>
+        Hör av dig till din kontaktperson om du vill uppgradera ditt paket och få plats för fler användare.
+      </p>
+      <a href="mailto:kontakt@revvbase.se" style="
+        display:block; background:#f0a500; color:#000;
+        font-weight:700; padding:0.8rem; border-radius:6px;
+        text-decoration:none; margin-bottom:0.75rem; font-size:0.95rem;
+      ">✉ Kontakta oss för uppgradering</a>
+      <button onclick="document.getElementById('paketModal').remove()" style="
+        background:transparent; border:1px solid var(--border);
+        color:var(--text-muted); padding:0.5rem 1.5rem;
+        border-radius:6px; cursor:pointer; font-size:0.88rem; width:100%;
+      ">Stäng</button>
+    </div>
+  </div>
+  {% else %}
+  <div class="alert alert-error">{{ error }}</div>
+  {% endif %}
+{% endif %}
 
 <div style="background:var(--bg2); border:1px solid var(--border); border-radius:var(--radius-lg); padding:1rem 1.5rem; margin-bottom:1.5rem; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:1rem;">
   <div>
     <div style="font-size:0.8rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:0.3rem;">Paket: <strong style="color:var(--accent)">{{ verkstad_paket | capitalize }}</strong></div>
     <div style="font-size:0.95rem;">
       <strong>{{ anvandare|length }}</strong>
-      <span style="color:var(--text-muted)"> / {% if max_seats == 9999 %}obegränsat{% else %}{{ max_seats }}{% endif %} användare</span>
+      <span style="color:var(--text-muted)"> / {% if paket_limits.obegransad_anvandare %}obegränsat{% else %}{{ paket_limits.max_anvandare }}{% endif %} användare</span>
     </div>
   </div>
   <div class="seat-dots" style="display:flex; gap:6px; flex-wrap:wrap;">
-    {% if max_seats == 9999 %}
+    {% if paket_limits.obegransad_anvandare %}
       <span style="font-size:0.82rem; color:var(--text-muted);">Obegränsat antal användare</span>
     {% else %}
-      {% for i in range(max_seats) %}
+      {% for i in range(paket_limits.max_anvandare) %}
         <div style="width:14px; height:14px; border-radius:50%; background:{% if i < anvandare|length %}var(--accent){% else %}var(--bg3){% endif %}; border:1px solid var(--border);"></div>
       {% endfor %}
     {% endif %}
@@ -31,7 +71,6 @@
 {% if seats_kvar > 0 %}
 <div class="form-card" style="max-width:560px; margin-bottom:2rem;">
   <h3 class="form-section__title" style="margin-bottom:1rem;">Lägg till användare</h3>
-  {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
   <form method="post" action="{{ url_for('ny_anvandare') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="form-row">
@@ -63,8 +102,8 @@
 {% else %}
 <div class="form-card" style="max-width:560px; margin-bottom:2rem; border-color:#5c4400;">
   <div style="font-size:0.9rem; color:#f0c040;">
-    ⚠ Du har använt alla {{ max_seats }} platser i ditt <strong>{{ verkstad_paket | capitalize }}</strong>-paket.
-    Uppgradera till ett högre paket för att lägga till fler användare.
+    ⚠ Du har använt alla <strong>{{ paket_limits.max_anvandare }}</strong> platser i ditt <strong>{{ verkstad_paket | capitalize }}</strong>-paket.
+    Kontakta <a href="mailto:kontakt@revvbase.se" style="color:var(--accent);">kontakt@revvbase.se</a> för att uppgradera.
   </div>
 </div>
 {% endif %}

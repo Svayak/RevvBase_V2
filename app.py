@@ -24,8 +24,6 @@ else:
         _f.write(_new_key)
     app.secret_key = _new_key
 
-# FIX #2: DB_PATH defaults to /home/data/verkstad.db on Azure (persistent storage)
-# Set DB_PATH=/home/data/verkstad.db in Azure App Service → Configuration → Application settings
 DB = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "verkstad.db"))
 
 csrf = CSRFProtect(app)
@@ -134,6 +132,27 @@ def get_db():
     conn = sqlite3.connect(DB)
     conn.row_factory = sqlite3.Row
     return conn
+
+# ── PAKETBEGRÄNSNINGAR (läser från DB, ej hårdkodade) ────────────────────────
+def get_paket_limits(paket):
+    """Hämtar paketgränser från paketinstallningar-tabellen.
+    Faller tillbaka på säkra standardvärden om tabellen saknar data."""
+    try:
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT * FROM paketinstallningar WHERE paket=?", (paket,)
+            ).fetchone()
+        if row:
+            return dict(row)
+    except Exception:
+        pass
+    # Fallback om tabellen är tom eller saknas
+    fallback = {
+        "bas":      {"max_anvandare": 1,    "max_bilar": 5,    "obegransad_anvandare": 0, "obegransad_bilar": 0, "pris": 299},
+        "standard": {"max_anvandare": 5,    "max_bilar": 20,   "obegransad_anvandare": 0, "obegransad_bilar": 0, "pris": 599},
+        "pro":      {"max_anvandare": 9999, "max_bilar": 9999, "obegransad_anvandare": 1, "obegransad_bilar": 1, "pris": 999},
+    }
+    return fallback.get(paket, fallback["bas"])
 
 def check_bil_access(bil_id):
     with get_db() as conn:
@@ -250,12 +269,8 @@ def init_db():
             conn.execute("ALTER TABLE bilar ADD COLUMN verkstad_id INTEGER")
         except: pass
         try:
-            conn.execute("ALTER TABLE bilar ADD COLUMN verkstad_id INTEGER")
-        except: pass
-        try:
             conn.execute("ALTER TABLE anvandare ADD COLUMN senaste_inloggning TEXT")
         except: pass
-        # Migration: byt UNIQUE(regnr) mot UNIQUE(regnr, verkstad_id)
         try:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS bilar_ny (
@@ -275,6 +290,23 @@ def init_db():
             """)
         except Exception as e:
             print(f"Migration bilar: {e}")
+        # Skapa paketinstallningar om den saknas
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS paketinstallningar (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                paket TEXT NOT NULL UNIQUE,
+                max_anvandare INTEGER NOT NULL DEFAULT 1,
+                max_bilar INTEGER NOT NULL DEFAULT 5,
+                obegransad_anvandare INTEGER NOT NULL DEFAULT 0,
+                obegransad_bilar INTEGER NOT NULL DEFAULT 0,
+                pris INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT OR IGNORE INTO paketinstallningar (paket, max_anvandare, max_bilar, obegransad_anvandare, obegransad_bilar, pris)
+            VALUES
+                ('bas', 1, 5, 0, 0, 299),
+                ('standard', 5, 20, 0, 0, 599),
+                ('pro', 9999, 9999, 1, 1, 999);
+        """)
 
 def get_fordonsmodell_intervall(marke, modell, arsmodell):
     with get_db() as conn:
@@ -457,7 +489,6 @@ def superadmin_backup():
 def landing():
     if current_user.is_authenticated:
         return redirect(url_for("index"))
-    # FIX #1: Use absolute path so it works regardless of gunicorn working directory
     landing_path = os.path.join(os.path.dirname(__file__), "landing.html")
     return open(landing_path, encoding="utf-8").read()
 
@@ -518,7 +549,6 @@ def index():
         return pausad
     q = request.args.get("q", "").strip()
     vid = current_user.verkstad_id
-    # FIX #3: Explicit SQL instead of fragile .replace() pattern
     with get_db() as conn:
         if q:
             if vid is not None:
@@ -565,22 +595,26 @@ def ny_bil():
         if not regnr or not marke or not modell:
             error = "Reg.nr, märke och modell är obligatoriska."
         else:
-            # Kontrollera fordonskvot
+            # Kontrollera fordonskvot mot paketinstallningar-tabellen
             if current_user.verkstad_id is not None:
-                PAKET_FORDON = {"bas": 25, "standard": 100, "pro": 9999}
                 with get_db() as conn:
                     v = conn.execute("SELECT paket FROM verkstader WHERE id=?", (current_user.verkstad_id,)).fetchone()
                     paket = v["paket"] if v else "bas"
                     antal = conn.execute("SELECT COUNT(*) FROM bilar WHERE verkstad_id=?", (current_user.verkstad_id,)).fetchone()[0]
-                max_fordon = PAKET_FORDON.get(paket, 25)
+
+                limits = get_paket_limits(paket)
+                if limits["obegransad_bilar"]:
+                    max_fordon = 999999
+                else:
+                    max_fordon = limits["max_bilar"]
+
                 if antal >= max_fordon:
-                    error = f"Paketet {paket.capitalize()} tillåter max {max_fordon} fordon. Uppgradera för att lägga till fler."
+                    error = f"PAKET_FULLT_BILAR:{paket}:{max_fordon}"
 
             if not error:
                 vid = current_user.verkstad_id
                 ar = int(arsmodell) if arsmodell.isdigit() else None
                 try:
-                    # INSERT bil
                     with get_db() as conn:
                         cur = conn.execute(
                             "INSERT INTO bilar (regnr,fordonsnummer,marke,modell,arsmodell,notering,verkstad_id) VALUES (?,?,?,?,?,?,?)",
@@ -588,7 +622,6 @@ def ny_bil():
                         )
                         bil_id = cur.lastrowid
 
-                    # Bygg intervall-dict från formuläret
                     iv_dict = {}
                     for t in NEDRAKNARE_TYPER:
                         aktiv = request.form.get(f"aktiv_{t}") == "1"
@@ -603,7 +636,6 @@ def ny_bil():
                             iv_dict[namn] = {"intervall": int(km_str), "aktiv": True, "egen": True}
                     spara_intervall(bil_id, iv_dict)
 
-                    # FIX #4: Spara fordonsmodell med en enda connection istället för en per loop-iteration
                     with get_db() as conn:
                         befintlig = conn.execute(
                             "SELECT id FROM fordonsmodeller WHERE marke=? AND modell=? AND (arsmodell=? OR (arsmodell IS NULL AND ? IS NULL))",
@@ -937,7 +969,6 @@ def ny_fordonsmodell():
         else:
             try:
                 ar = int(arsmodell) if arsmodell.isdigit() else None
-                # FIX #4 pattern: en connection för hela operationen
                 with get_db() as conn:
                     cur = conn.execute(
                         "INSERT INTO fordonsmodeller (marke, modell, arsmodell) VALUES (?,?,?)",
@@ -993,7 +1024,6 @@ def redigera_fordonsmodell(fm_id):
         else:
             ar = int(arsmodell) if arsmodell.isdigit() else None
             iv_dict = {}
-            # FIX #4 pattern: en connection för hela uppdateringen
             with get_db() as conn:
                 conn.execute(
                     "UPDATE fordonsmodeller SET marke=?, modell=?, arsmodell=? WHERE id=?",
@@ -1008,7 +1038,6 @@ def redigera_fordonsmodell(fm_id):
                         "INSERT OR REPLACE INTO fordonsmodell_intervall (fordonsmodell_id, service_typ, intervall_km, aktiv) VALUES (?,?,?,?)",
                         (fm_id, t, iv_km, 1 if aktiv else 0)
                     )
-                # Ta bort gamla egna typer
                 conn.execute(
                     "DELETE FROM fordonsmodell_intervall WHERE fordonsmodell_id=? AND service_typ NOT IN ({})".format(
                         ",".join("?" * len(NEDRAKNARE_TYPER))
@@ -1024,7 +1053,6 @@ def redigera_fordonsmodell(fm_id):
                             "INSERT OR REPLACE INTO fordonsmodell_intervall (fordonsmodell_id, service_typ, intervall_km, aktiv) VALUES (?,?,?,?)",
                             (fm_id, namn, int(km_str), 1)
                         )
-            # Synka alla bilar av samma märke + modell + årsmodell
             with get_db() as conn:
                 bilar = conn.execute(
                     "SELECT id FROM bilar WHERE marke=? AND modell=? AND (arsmodell=? OR (arsmodell IS NULL AND ? IS NULL))",
@@ -1203,8 +1231,6 @@ def logout():
 
 # ── ADMIN (per verkstad) ──────────────────────────────────────────────────────
 
-PAKET_SEATS = {"bas": 1, "standard": 5, "pro": 9999}
-
 @app.route("/admin")
 @login_required
 def admin():
@@ -1221,8 +1247,11 @@ def admin():
         else:
             anvandare = conn.execute("SELECT id, username, namn, roll FROM anvandare ORDER BY namn").fetchall()
             verkstad_paket = "pro"
+
+    paket_limits = get_paket_limits(verkstad_paket)
     error = request.args.get("error")
-    return render_template("admin.html", anvandare=anvandare, verkstad_paket=verkstad_paket, error=error)
+    return render_template("admin.html", anvandare=anvandare, verkstad_paket=verkstad_paket,
+                           paket_limits=paket_limits, error=error)
 
 @app.route("/admin/ny", methods=["POST"])
 @login_required
@@ -1240,10 +1269,17 @@ def ny_anvandare():
         with get_db() as conn:
             v = conn.execute("SELECT paket FROM verkstader WHERE id=?", (vid,)).fetchone()
             paket = v["paket"] if v else "bas"
-            max_seats = PAKET_SEATS.get(paket, 1)
             antal = conn.execute("SELECT COUNT(*) FROM anvandare WHERE verkstad_id=?", (vid,)).fetchone()[0]
+
+        limits = get_paket_limits(paket)
+        if limits["obegransad_anvandare"]:
+            max_seats = 999999
+        else:
+            max_seats = limits["max_anvandare"]
+
         if antal >= max_seats:
-            return redirect(url_for("admin", error=f"Paketet {paket.capitalize()} tillåter max {max_seats} användare. Uppgradera för att lägga till fler."))
+            return redirect(url_for("admin", error=f"PAKET_FULLT_ANV:{paket}:{max_seats}"))
+
     try:
         with get_db() as conn:
             conn.execute(

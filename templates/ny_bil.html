@@ -4,7 +4,46 @@
 <div class="form-page">
   <a href="{{ url_for('index') }}" class="back-link">← Tillbaka</a>
   <h1 class="page-title">Lägg till bil</h1>
-  {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+
+  {% if error %}
+    {% if error.startswith("PAKET_FULLT") %}
+    <!-- Modal: fordonsplatser fulla -->
+    <div style="
+      position:fixed; top:0; left:0; right:0; bottom:0;
+      background:rgba(0,0,0,0.75); z-index:200;
+      display:flex; align-items:center; justify-content:center;
+    " id="paketModal">
+      <div style="
+        background:#181b1e; border:2px solid #f0a500;
+        border-radius:12px; padding:2.5rem 2rem; max-width:440px; width:90%;
+        text-align:center; box-shadow:0 8px 40px rgba(0,0,0,0.6);
+      ">
+        <div style="font-size:3rem; margin-bottom:1rem;">🚗</div>
+        <h2 style="font-family:var(--font-head); font-size:1.8rem; margin-bottom:0.75rem; color:#f0a500;">
+          Fordonsplatser fulla
+        </h2>
+        <p style="color:var(--text-muted); font-size:0.95rem; line-height:1.7; margin-bottom:1.75rem;">
+          Ditt paket tillåter maximalt
+          <strong style="color:var(--text)">{{ error.split(":")[2] }} fordon</strong>.
+          <br><br>
+          Hör av dig till din kontaktperson om du vill uppgradera ditt paket och registrera fler fordon.
+        </p>
+        <a href="mailto:kontakt@revvbase.se" style="
+          display:block; background:#f0a500; color:#000;
+          font-weight:700; padding:0.8rem; border-radius:6px;
+          text-decoration:none; margin-bottom:0.75rem; font-size:0.95rem;
+        ">✉ Kontakta oss för uppgradering</a>
+        <a href="{{ url_for('index') }}" style="
+          display:block; background:transparent; border:1px solid var(--border);
+          color:var(--text-muted); padding:0.5rem; border-radius:6px;
+          text-decoration:none; font-size:0.88rem;
+        ">← Tillbaka till fordonsregistret</a>
+      </div>
+    </div>
+    {% else %}
+    <div class="alert alert-error">{{ error }}</div>
+    {% endif %}
+  {% endif %}
 
   <form method="post" class="form-card" id="bilForm">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -100,13 +139,11 @@ function valjFranBibliotek(sel) {
     return;
   }
 
-  // Fyll i från bibliotek
   markeEl.value = opt.dataset.marke;
   modellEl.value = opt.dataset.modell;
   arEl.value = opt.dataset.ar || '';
   markeEl.readOnly = true; modellEl.readOnly = true; arEl.readOnly = true;
 
-  // Parsa intervall-strängen: "typ:km:aktiv|typ:km:aktiv"
   var ivData = {};
   var egna = [];
   if (opt.dataset.intervall) {
@@ -124,7 +161,6 @@ function valjFranBibliotek(sel) {
   }
   resetIntervall(ivData);
 
-  // Fyll i egna servicetyper
   var cont = document.getElementById('egnaTyper');
   cont.innerHTML = '';
   egna.forEach(function(e) {
