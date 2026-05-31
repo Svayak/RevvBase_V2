@@ -1470,6 +1470,10 @@ def mitt_konto():
                 with get_db() as conn:
                     conn.execute("UPDATE anvandare SET password_hash=? WHERE id=?",
                         (generate_password_hash(nytt, method="pbkdf2:sha256"), current_user.id))
+                ny_token = secrets.token_hex(16)
+                with get_db() as conn:
+                    conn.execute("UPDATE anvandare SET session_token=? WHERE id=?", (ny_token, current_user.id))
+                session["session_token"] = ny_token
                 success = "Lösenordet är uppdaterat!"
             else:
                 error = "Fel nuvarande lösenord."
