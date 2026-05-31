@@ -419,6 +419,85 @@ def bygg_panel(bil_id, marke, modell, handelser, senaste_km, arsmodell=None, ver
         panel[t] = {"diff": diff, "intervall": iv, "aldrig_gjort": aldrig_gjort}
     return panel
 
+def send_email(to, subject, html):
+    """Skickar e-post via Resend API. Returnerar True vid lyckat sändning."""
+    import urllib.request, json as _json
+    api_key = os.environ.get("RESEND_API_KEY")
+    if not api_key:
+        print("VARNING: RESEND_API_KEY saknas — mail skickas ej")
+        return False
+    payload = _json.dumps({
+        "from": "RevvBase <no-reply@revvbase.se>",
+        "to": [to],
+        "subject": subject,
+        "html": html,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status == 200
+    except Exception as e:
+        print(f"Mail-fel: {e}")
+        return False
+
+def valkomstmail_html(namn, slug, email, password, paket):
+    """Genererar HTML för välkomstmailet till ny verkstad."""
+    return f"""<!DOCTYPE html>
+<html lang="sv">
+<head><meta charset="UTF-8">
+<style>
+  body {{ font-family: Arial, sans-serif; background: #f5f5f5; margin: 0; padding: 0; }}
+  .wrap {{ max-width: 560px; margin: 40px auto; background: #fff; border-radius: 8px; overflow: hidden; }}
+  .header {{ background: #0f1113; padding: 32px 40px; text-align: center; }}
+  .logo-top {{ font-family: Arial Black, sans-serif; font-size: 28px; font-weight: 900; color: #f0a500; letter-spacing: .08em; }}
+  .logo-bot {{ font-family: Arial Black, sans-serif; font-size: 28px; font-weight: 900; color: #e8eaec; letter-spacing: .08em; }}
+  .body {{ padding: 40px; color: #222; }}
+  h1 {{ font-size: 22px; margin: 0 0 16px; }}
+  p {{ line-height: 1.6; color: #444; margin: 0 0 16px; }}
+  .info-box {{ background: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 6px; padding: 20px 24px; margin: 24px 0; }}
+  .info-row {{ display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #eee; font-size: 14px; }}
+  .info-row:last-child {{ border-bottom: none; }}
+  .label {{ color: #888; }}
+  .value {{ font-weight: 600; color: #222; }}
+  .btn {{ display: block; background: #f0a500; color: #000; text-decoration: none; text-align: center; padding: 14px; border-radius: 6px; font-weight: 700; font-size: 16px; margin: 24px 0; }}
+  .footer {{ padding: 24px 40px; background: #f9f9f9; font-size: 12px; color: #999; text-align: center; border-top: 1px solid #eee; }}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <div class="logo-top">REVV</div>
+    <div class="logo-bot">BASE</div>
+  </div>
+  <div class="body">
+    <h1>Välkommen till RevvBase, {namn}!</h1>
+    <p>Ditt konto är nu aktiverat. Här är dina inloggningsuppgifter:</p>
+    <div class="info-box">
+      <div class="info-row"><span class="label">Inloggningssida</span><span class="value">revvbase.se/login</span></div>
+      <div class="info-row"><span class="label">E-post</span><span class="value">{email}</span></div>
+      <div class="info-row"><span class="label">Lösenord</span><span class="value">{password}</span></div>
+      <div class="info-row"><span class="label">Din URL</span><span class="value">revvbase.se/{slug}</span></div>
+      <div class="info-row"><span class="label">Paket</span><span class="value">{paket.capitalize()}</span></div>
+    </div>
+    <a href="https://revvbase.se/login" class="btn">Logga in nu →</a>
+    <p style="font-size:13px; color:#888;">Byt lösenord direkt efter första inloggningen under <strong>Konto</strong> i menyn.</p>
+  </div>
+  <div class="footer">
+    RevvBase · <a href="mailto:kontakt@revvbase.se" style="color:#f0a500;">kontakt@revvbase.se</a><br>
+    Du får detta mail eftersom ett konto skapades för din e-postadress.
+  </div>
+</div>
+</body>
+</html>"""
+
 def daglig_backup():
     while True:
         nu = datetime.now()
@@ -1321,6 +1400,8 @@ def ny_anvandare():
     vid      = current_user.verkstad_id
     if not (username and namn and password):
         return redirect(url_for("admin"))
+    if len(password) < 8:
+        return redirect(url_for("admin", error="Lösenordet måste vara minst 8 tecken."))
     if vid is not None:
         with get_db() as conn:
             v = conn.execute("SELECT paket FROM verkstader WHERE id=?", (vid,)).fetchone()
@@ -1340,7 +1421,7 @@ def ny_anvandare():
         with get_db() as conn:
             conn.execute(
                 "INSERT INTO anvandare (username, namn, password_hash, roll, verkstad_id) VALUES (?,?,?,?,?)",
-                (username, namn, generate_password_hash(password), roll, vid)
+                (username, namn, generate_password_hash(password, method="pbkdf2:sha256"), roll, vid)
             )
     except sqlite3.IntegrityError:
         return redirect(url_for("admin", error=f"E-postadressen {username} används redan."))
@@ -1355,7 +1436,7 @@ def byt_losenord(anv_id):
     if password:
         with get_db() as conn:
             conn.execute("UPDATE anvandare SET password_hash=? WHERE id=?",
-                (generate_password_hash(password), anv_id))
+                (generate_password_hash(password, method="pbkdf2:sha256"), anv_id))
     return redirect(url_for("admin") if current_user.roll == "admin" else url_for("index"))
 
 @app.route("/admin/ta-bort/<int:anv_id>", methods=["POST"])
@@ -1387,7 +1468,7 @@ def mitt_konto():
             if check_password_hash(row["password_hash"], gammalt):
                 with get_db() as conn:
                     conn.execute("UPDATE anvandare SET password_hash=? WHERE id=?",
-                        (generate_password_hash(nytt), current_user.id))
+                        (generate_password_hash(nytt, method="pbkdf2:sha256"), current_user.id))
                 success = "Lösenordet är uppdaterat!"
             else:
                 error = "Fel nuvarande lösenord."
@@ -1480,10 +1561,16 @@ def superadmin_ny_verkstad():
                 verkstad_id = cur.lastrowid
                 conn.execute(
                     "INSERT INTO anvandare (username, namn, password_hash, roll, verkstad_id) VALUES (?,?,?,?,?)",
-                    (email, namn, generate_password_hash(password), "admin", verkstad_id)
+                    (email, namn, generate_password_hash(password, method="pbkdf2:sha256"), "admin", verkstad_id)
                 )
         except Exception as e:
             pass
+        else:
+            # Skicka välkomstmail till ny kund
+            html = valkomstmail_html(namn, slug, email, password, paket)
+            skickat = send_email(email, "Välkommen till RevvBase!", html)
+            if not skickat:
+                print(f"Välkomstmail kunde ej skickas till {email}")
     return redirect(url_for("superadmin"))
 
 @app.route("/superadmin/pausa/<int:vid>", methods=["POST"])
@@ -1590,7 +1677,7 @@ if __name__ == "__main__":
         with get_db() as conn:
             conn.execute(
                 "INSERT INTO anvandare (username, namn, password_hash, roll, verkstad_id) VALUES (?,?,?,?,?)",
-                ("admin", "Admin", generate_password_hash("verkstad123"), "admin", None)
+                ("admin", "Admin", generate_password_hash("verkstad123", method="pbkdf2:sha256"), "admin", None)
             )
         print("Skapade standardanvändare: admin / verkstad123")
     t = threading.Thread(target=daglig_backup, daemon=True)

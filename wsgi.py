@@ -17,7 +17,7 @@ if count == 0:
     with get_db() as conn:
         conn.execute(
             "INSERT INTO anvandare (username, namn, password_hash, roll) VALUES (?,?,?,?)",
-            ("admin", "Admin", generate_password_hash("verkstad123"), "admin")
+            ("admin", "Admin", generate_password_hash("verkstad123", method="pbkdf2:sha256"), "admin")
         )
 
 if __name__ == '__main__':
