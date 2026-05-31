@@ -29,6 +29,30 @@ DB = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "verkstad
 csrf = CSRFProtect(app)
 login_manager = LoginManager()
 
+@app.after_request
+def security_headers(response):
+    """Lägg till HTTP-säkerhetsheaders på alla svar."""
+    # Hindrar webbläsaren från att gissa innehållstyp
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    # Hindrar sidan från att bäddas in i iframe (clickjacking-skydd)
+    response.headers['X-Frame-Options'] = 'DENY'
+    # Stänger av XSS-filter i äldre webbläsare (moderna har CSP istället)
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    # Skickar inte Referer-header till externa sidor
+    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    # Tvinga HTTPS i 1 år (HSTS)
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    # Content Security Policy: tillåt bara resurser från revvbase.se + Google Fonts
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
+        "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net; "
+        "img-src 'self' data:; "
+        "connect-src 'self';"
+    )
+    return response
+
 # ── BRUTE-FORCE SKYDD ────────────────────────────────────────────────────────
 _login_attempts = defaultdict(list)
 _sa_login_attempts = defaultdict(list)
@@ -1234,9 +1258,14 @@ def login():
             session.permanent = True
             login_user(user, remember=False)
             next_url = request.args.get("next")
-            if next_url and not next_url.startswith("/"):
-                next_url = None
+            # Säker redirect: måste vara relativ URL på samma domän
+            # Blockerar //evil.com, http://evil.com, javascript: etc.
             if next_url:
+                from urllib.parse import urlparse
+                parsed = urlparse(next_url)
+                if parsed.scheme or parsed.netloc:
+                    next_url = None  # Extern URL — ignorera
+            if next_url and next_url.startswith("/"):
                 return redirect(next_url)
             if slug:
                 return redirect(f"/{slug}")
@@ -1366,7 +1395,12 @@ def mitt_konto():
 
 # ── SUPERADMIN ────────────────────────────────────────────────────────────────
 
-SUPERADMIN_PASSWORD = os.environ.get("SUPERADMIN_PASSWORD", "revvbase-super-2026")
+SUPERADMIN_PASSWORD = os.environ.get("SUPERADMIN_PASSWORD")
+if not SUPERADMIN_PASSWORD:
+    raise RuntimeError(
+        "Miljövariabeln SUPERADMIN_PASSWORD är inte satt! "
+        "Sätt den i Azure App Service → Configuration → Application settings."
+    )
 
 @app.route("/superadmin/login", methods=["GET","POST"])
 def superadmin_login():
@@ -1384,6 +1418,7 @@ def superadmin_login():
         if pw == SUPERADMIN_PASSWORD:
             rensa_forsok(ip, _sa_login_attempts)
             session["superadmin"] = True
+            session["superadmin_last_active"] = time.time()
             return redirect(url_for("superadmin"))
         registrera_misslyckat(ip, _sa_login_attempts)
         forsok_kvar = MAX_ATTEMPTS - len(_sa_login_attempts[ip])
@@ -1397,6 +1432,13 @@ def superadmin_login():
 def superadmin():
     if not session.get("superadmin"):
         return redirect(url_for("superadmin_login"))
+    # Session-timeout: 30 minuter inaktivitet
+    sa_last = session.get("superadmin_last_active")
+    if sa_last and (time.time() - sa_last) > 30 * 60:
+        session.pop("superadmin", None)
+        session.pop("superadmin_last_active", None)
+        return redirect(url_for("superadmin_login"))
+    session["superadmin_last_active"] = time.time()
     with get_db() as conn:
         verkstader = conn.execute("""
             SELECT v.*,
