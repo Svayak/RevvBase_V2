@@ -482,11 +482,11 @@ def valkomstmail_html(namn, slug, email, password, paket):
     <h1>Välkommen till RevvBase, {namn}!</h1>
     <p>Ditt konto är nu aktiverat. Här är dina inloggningsuppgifter:</p>
     <div class="info-box">
-      <div class="info-row"><span class="label">Inloggningssida</span><span class="value">revvbase.se/login</span></div>
-      <div class="info-row"><span class="label">E-post</span><span class="value">{email}</span></div>
-      <div class="info-row"><span class="label">Lösenord</span><span class="value">{password}</span></div>
-      <div class="info-row"><span class="label">Din URL</span><span class="value">revvbase.se/{slug}</span></div>
-      <div class="info-row"><span class="label">Paket</span><span class="value">{paket.capitalize()}</span></div>
+      <div class="info-row"><span class="label">Inloggningssida:</span><span class="value">revvbase.se/login</span></div>
+      <div class="info-row"><span class="label">E-post:</span><span class="value">{email}</span></div>
+      <div class="info-row"><span class="label">Lösenord:</span><span class="value">{password}</span></div>
+      <div class="info-row"><span class="label">Din URL:</span><span class="value">revvbase.se/{slug}</span></div>
+      <div class="info-row"><span class="label">Paket:</span><span class="value">{paket.capitalize()}</span></div>
     </div>
     <a href="https://revvbase.se/login" class="btn">Logga in nu →</a>
     <p style="font-size:13px; color:#888;">Byt lösenord direkt efter första inloggningen under <strong>Konto</strong> i menyn.</p>
