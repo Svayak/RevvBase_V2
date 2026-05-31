@@ -1511,6 +1511,27 @@ def superadmin_paket():
     paket_dict = {r["paket"]: r for r in paket_rader}
     return render_template("superadmin_paket.html", paket=paket_dict)
 
+
+@app.route("/superadmin/byt-losenord/<int:vid>", methods=["POST"])
+def superadmin_byt_losenord(vid):
+    if not session.get("superadmin"):
+        return redirect(url_for("superadmin_login"))
+    nytt_losenord = request.form.get("nytt_losenord", "").strip()
+    if not nytt_losenord:
+        return redirect(url_for("superadmin", msg="Lösenordet får inte vara tomt."))
+    # Använd explicit pbkdf2:sha256 — undviker scrypt-kompatibilitetsproblem på Azure
+    from werkzeug.security import generate_password_hash
+    ny_hash = generate_password_hash(nytt_losenord, method="pbkdf2:sha256")
+    with get_db() as conn:
+        # Uppdatera admin-användaren för denna verkstad
+        rows = conn.execute(
+            "UPDATE anvandare SET password_hash=? WHERE verkstad_id=? AND roll='admin'",
+            (ny_hash, vid)
+        ).rowcount
+    if rows:
+        return redirect(url_for("superadmin", msg="✓ Lösenordet är uppdaterat!"))
+    return redirect(url_for("superadmin", msg="Ingen admin-användare hittades för den verkstaden."))
+
 @app.route("/superadmin/logout")
 def superadmin_logout():
     session.pop("superadmin", None)

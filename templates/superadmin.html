@@ -43,6 +43,8 @@
     .btn-sm{padding:.3rem .75rem;border-radius:5px;font-size:.75rem;font-weight:600;cursor:pointer;border:none}
     .btn-edit{background:#22262b;color:#e8eaec;border:1px solid #2e3338}
     .btn-edit:hover{border-color:#f0a500;color:#f0a500}
+    .btn-pw{background:#1a2b1a;color:#6eff9f;border:1px solid #1e4d2b}
+    .btn-pw:hover{border-color:#4cd97a;color:#4cd97a}
     .btn-pause{background:#3d2a00;color:#f0a500;border:1px solid #5c3d00}
     .btn-unpause{background:#0d2b1a;color:#4cd97a;border:1px solid #1a4d2b}
     .btn-danger{background:#2b0d0d;color:#e05050;border:1px solid #4d1a1a}
@@ -51,10 +53,12 @@
     .last-login{font-size:.75rem;color:#7a8490}
     .alert-success{background:#0d2b1a;border:1px solid #1e4d2b;color:#6eff9f;padding:.75rem 1rem;border-radius:6px;margin-bottom:1rem}
     .alert-error{background:#2b0d0d;border:1px solid #4d1a1a;color:#ff8080;padding:.75rem 1rem;border-radius:6px;margin-bottom:1rem}
+    /* ── MODALER ── */
     .modal-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:100;align-items:center;justify-content:center}
     .modal-overlay.active{display:flex}
     .modal{background:#181b1e;border:1px solid #2e3338;border-radius:10px;padding:2rem;width:100%;max-width:460px}
     .modal h2{font-family:'Barlow Condensed',sans-serif;font-size:1.4rem;font-weight:700;margin-bottom:1.5rem}
+    .modal-sub{font-size:.85rem;color:#7a8490;margin-bottom:1.25rem;margin-top:-.75rem}
     .form-group{margin-bottom:1rem}
     .form-label{display:block;font-size:.8rem;color:#7a8490;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.4rem;font-weight:600}
     .form-input{width:100%;background:#22262b;border:1px solid #2e3338;border-radius:6px;color:#e8eaec;padding:.6rem .8rem;font-size:.95rem}
@@ -63,6 +67,7 @@
     .form-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
     .modal-btns{display:flex;justify-content:space-between;margin-top:1.5rem}
     .btn-ghost-modal{background:transparent;color:#7a8490;border:1px solid #2e3338;border-radius:6px;padding:.5rem 1.2rem;font-size:.9rem;cursor:pointer}
+    .pw-hint{font-size:.78rem;color:#7a8490;margin-top:.4rem;line-height:1.4}
     @media(max-width:700px){.stats{grid-template-columns:repeat(3,1fr)}.form-row{grid-template-columns:1fr}}
   </style>
 </head>
@@ -78,7 +83,7 @@
 <div class="main">
 
   {% if request.args.get('msg') %}
-    {% if 'fel' in request.args.get('msg') | lower %}
+    {% if 'fel' in request.args.get('msg') | lower or 'Ingen' in request.args.get('msg') %}
     <div class="alert-error">{{ request.args.get('msg') }}</div>
     {% else %}
     <div class="alert-success">{{ request.args.get('msg') }}</div>
@@ -143,6 +148,7 @@
           <td>{{ v.antal_bilar }}</td>
           <td style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;">
             <button class="btn-sm btn-edit" onclick="oppnaRedigera({{ v.id }}, '{{ v.namn }}', '{{ v.slug }}', '{{ v.admin_email }}', '{{ v.paket }}')">Redigera</button>
+            <button class="btn-sm btn-pw" onclick="oppnaBytLosenord({{ v.id }}, '{{ v.namn }}')">🔑 Lösenord</button>
             <form method="post" action="/superadmin/backup" style="display:inline">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="verkstad_id" value="{{ v.id }}">
@@ -168,7 +174,7 @@
   </div>
 </div>
 
-<!-- Ny kund modal -->
+<!-- ── NY KUND MODAL ── -->
 <div class="modal-overlay" id="nyModal">
   <div class="modal">
     <h2>Lägg till ny kund</h2>
@@ -196,8 +202,8 @@
         <div class="form-group">
           <label class="form-label">Paket</label>
           <select class="form-input" name="paket">
-            <option value="bas">Bas (25 fordon, 1 användare)</option>
-            <option value="standard">Standard (100 fordon, 5 användare)</option>
+            <option value="bas">Bas</option>
+            <option value="standard">Standard</option>
             <option value="pro">Pro (obegränsat)</option>
           </select>
         </div>
@@ -210,7 +216,7 @@
   </div>
 </div>
 
-<!-- Redigera kund modal -->
+<!-- ── REDIGERA KUND MODAL ── -->
 <div class="modal-overlay" id="redigeraModal">
   <div class="modal">
     <h2>Redigera kund</h2>
@@ -233,14 +239,37 @@
       <div class="form-group">
         <label class="form-label">Paket</label>
         <select class="form-input" name="paket" id="r_paket">
-          <option value="bas">Bas (25 fordon, 1 användare)</option>
-          <option value="standard">Standard (100 fordon, 5 användare)</option>
+          <option value="bas">Bas</option>
+          <option value="standard">Standard</option>
           <option value="pro">Pro (obegränsat)</option>
         </select>
       </div>
       <div class="modal-btns">
         <button type="button" class="btn-ghost-modal" onclick="stangModal('redigeraModal')">Avbryt</button>
         <button type="submit" class="btn-primary">Spara ändringar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ── BYT LÖSENORD MODAL ── -->
+<div class="modal-overlay" id="pwModal">
+  <div class="modal">
+    <h2>Byt lösenord</h2>
+    <p class="modal-sub" id="pw_verkstad_namn">Verkstad</p>
+    <form method="post" id="pwForm" action="/superadmin/byt-losenord/0">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-group">
+        <label class="form-label">Nytt lösenord *</label>
+        <input class="form-input" type="text" name="nytt_losenord" id="pw_input"
+               placeholder="Ange nytt lösenord" autocomplete="off" required>
+        <div class="pw-hint">
+          Lösenordet sparas med pbkdf2:sha256 och fungerar direkt på Azure.
+        </div>
+      </div>
+      <div class="modal-btns">
+        <button type="button" class="btn-ghost-modal" onclick="stangModal('pwModal')">Avbryt</button>
+        <button type="submit" class="btn-primary">Spara lösenord</button>
       </div>
     </form>
   </div>
@@ -260,6 +289,13 @@ function oppnaRedigera(vid, namn, slug, email, paket) {
   document.getElementById('r_paket').value = paket;
   document.getElementById('redigeraForm').action = '/superadmin/redigera/' + vid;
   oppnaModal('redigeraModal');
+}
+function oppnaBytLosenord(vid, namn) {
+  document.getElementById('pw_verkstad_namn').textContent = 'Verkstad: ' + namn;
+  document.getElementById('pwForm').action = '/superadmin/byt-losenord/' + vid;
+  document.getElementById('pw_input').value = '';
+  oppnaModal('pwModal');
+  setTimeout(function(){ document.getElementById('pw_input').focus(); }, 100);
 }
 document.querySelectorAll('.modal-overlay').forEach(function(el) {
   el.addEventListener('click', function(e) {
