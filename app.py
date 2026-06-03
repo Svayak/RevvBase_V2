@@ -109,12 +109,11 @@ def load_user(user_id):
 def validate_session_token():
     if current_user.is_authenticated:
         stored = session.get("session_token")
-        if stored:
-            with get_db() as conn:
-                row = conn.execute("SELECT session_token FROM anvandare WHERE id=?", (current_user.id,)).fetchone()
-            if not row or row["session_token"] != stored:
-                logout_user()
-                return redirect(url_for("login"))
+        with get_db() as conn:
+            row = conn.execute("SELECT session_token FROM anvandare WHERE id=?", (current_user.id,)).fetchone()
+        if not row or row["session_token"] != stored:
+            logout_user()
+            return redirect(url_for("login"))
 
 # ── HJÄLPFUNKTIONER ───────────────────────────────────────────────────────────
 BACKUP_DIR = os.environ.get("BACKUP_DIR", "/home/data/säkerhetskopior")
@@ -384,8 +383,6 @@ def get_intervall(bil_id, marke, modell, arsmodell=None, verkstad_id=None):
         if t in db_map:
             r = db_map[t]
             result[t] = {"intervall": r["intervall_km"], "aktiv": bool(r["aktiv"]), "egen": False}
-        elif rader:
-            pass
         elif t in standard:
             result[t] = {"intervall": standard[t], "aktiv": standard[t] is not None, "egen": False}
     for r in rader:
@@ -568,8 +565,9 @@ def daglig_backup():
 
 @app.route("/superadmin/backup", methods=["POST"])
 def superadmin_backup():
-    if not session.get("superadmin"):
-        return redirect(url_for("superadmin_login"))
+    redir = require_superadmin()
+    if redir:
+        return redir
     verkstad_id = request.form.get("verkstad_id")
     idag = datetime.now().strftime("%Y-%m-%d")
     try:
@@ -1001,24 +999,68 @@ def kommande():
     vid = current_user.verkstad_id
     with get_db() as conn:
         if vid is not None:
-            bilar = conn.execute("SELECT * FROM bilar WHERE verkstad_id=? ORDER BY fordonsnummer, regnr", (vid,)).fetchall()
+            bilar = conn.execute(
+                "SELECT * FROM bilar WHERE verkstad_id=? ORDER BY fordonsnummer, regnr", (vid,)
+            ).fetchall()
         else:
             bilar = conn.execute("SELECT * FROM bilar ORDER BY fordonsnummer, regnr").fetchall()
+        if not bilar:
+            return render_template("kommande.html", bilar_service=[])
+        bil_ids = [b["id"] for b in bilar]
+        marks = ",".join("?" * len(bil_ids))
+        alla_handelser = conn.execute(
+            "SELECT * FROM handelser WHERE bil_id IN ({}) ORDER BY km DESC".format(marks), bil_ids
+        ).fetchall()
+        alla_si = conn.execute(
+            "SELECT bil_id, service_typ, intervall_km, aktiv FROM serviceintervall WHERE bil_id IN ({})".format(marks), bil_ids
+        ).fetchall()
+
+    handelser_map = defaultdict(list)
+    for h in alla_handelser:
+        handelser_map[h["bil_id"]].append(h)
+    si_map = defaultdict(list)
+    for si in alla_si:
+        si_map[si["bil_id"]].append(si)
+    fm_cache = {}
 
     bilar_service = []
     for b in bilar:
-        with get_db() as conn:
-            handelser = conn.execute(
-                "SELECT * FROM handelser WHERE bil_id=? ORDER BY km DESC", (b["id"],)
-            ).fetchall()
+        handelser = handelser_map[b["id"]]
         senaste_km = handelser[0]["km"] if handelser else None
         if senaste_km is None:
             continue
-        panel = bygg_panel(b["id"], b["marke"], b["modell"], handelser, senaste_km, b["arsmodell"], b["verkstad_id"])
+        # Build intervall from preloaded data; cache fordonsmodell lookup per unique model
+        fm_key = (b["marke"], b["modell"], b["arsmodell"], b["verkstad_id"])
+        if fm_key not in fm_cache:
+            fm_cache[fm_key] = get_fordonsmodell_intervall(*fm_key)
+        fm_intervall = fm_cache[fm_key]
+        nyckel = "{} {}".format(b["marke"], b["modell"])
+        standard = fm_intervall if fm_intervall else STANDARD_INTERVALL.get(nyckel, {})
+        si_rader = si_map[b["id"]]
+        db_map_si = {r["service_typ"]: r for r in si_rader}
+        intervaller = {}
+        for t in NEDRAKNARE_TYPER:
+            if t in db_map_si:
+                r = db_map_si[t]
+                intervaller[t] = {"intervall": r["intervall_km"], "aktiv": bool(r["aktiv"])}
+            elif t in standard:
+                intervaller[t] = {"intervall": standard[t], "aktiv": standard[t] is not None}
+        for r in si_rader:
+            if r["service_typ"] not in NEDRAKNARE_TYPER and bool(r["aktiv"]):
+                intervaller[r["service_typ"]] = {"intervall": r["intervall_km"], "aktiv": True}
+        # Build service panel
+        senaste_per_typ = {}
+        for h in handelser:
+            if h["service_typer"]:
+                for t in json.loads(h["service_typer"]):
+                    if t not in senaste_per_typ:
+                        senaste_per_typ[t] = h["km"]
         atgarder = []
-        for typ, info in panel.items():
-            diff = info["diff"]
+        for typ, info in intervaller.items():
+            if not info["aktiv"]:
+                continue
             iv = info["intervall"]
+            diff = (senaste_km - senaste_per_typ[typ]) if typ in senaste_per_typ else senaste_km
             if iv is None or diff is None:
                 continue
             if diff >= iv:
@@ -1038,28 +1080,82 @@ def arbetsorder():
     if not bil_ids:
         return redirect(url_for("kommande"))
 
-    bilar_data = []
-    for bil_id in bil_ids:
-        bil_id = int(bil_id)
-        with get_db() as conn:
-            b = conn.execute("SELECT * FROM bilar WHERE id=?", (bil_id,)).fetchone()
-        if not b:
-            continue
-        vid = current_user.verkstad_id
-        if vid is not None and b["verkstad_id"] != vid:
-            continue
-        with get_db() as conn:
-            handelser = conn.execute(
-                "SELECT * FROM handelser WHERE bil_id=? ORDER BY km DESC", (bil_id,)
+    vid = current_user.verkstad_id
+    # Sanitise and tenant-filter the submitted ids in one DB round-trip
+    int_ids = []
+    for x in bil_ids:
+        try:
+            int_ids.append(int(x))
+        except ValueError:
+            pass
+    if not int_ids:
+        return redirect(url_for("kommande"))
+    marks = ",".join("?" * len(int_ids))
+    with get_db() as conn:
+        if vid is not None:
+            bilar = conn.execute(
+                "SELECT * FROM bilar WHERE id IN ({}) AND verkstad_id=?".format(marks),
+                int_ids + [vid]
             ).fetchall()
+        else:
+            bilar = conn.execute(
+                "SELECT * FROM bilar WHERE id IN ({})".format(marks), int_ids
+            ).fetchall()
+        if not bilar:
+            return redirect(url_for("kommande"))
+        b_ids = [b["id"] for b in bilar]
+        bmarks = ",".join("?" * len(b_ids))
+        alla_handelser = conn.execute(
+            "SELECT * FROM handelser WHERE bil_id IN ({}) ORDER BY km DESC".format(bmarks), b_ids
+        ).fetchall()
+        alla_si = conn.execute(
+            "SELECT bil_id, service_typ, intervall_km, aktiv FROM serviceintervall WHERE bil_id IN ({})".format(bmarks), b_ids
+        ).fetchall()
+
+    handelser_map = defaultdict(list)
+    for h in alla_handelser:
+        handelser_map[h["bil_id"]].append(h)
+    si_map = defaultdict(list)
+    for si in alla_si:
+        si_map[si["bil_id"]].append(si)
+    fm_cache = {}
+
+    bilar_data = []
+    for b in bilar:
+        handelser = handelser_map[b["id"]]
         senaste_km = handelser[0]["km"] if handelser else None
         if senaste_km is None:
             continue
-        panel = bygg_panel(bil_id, b["marke"], b["modell"], handelser, senaste_km, b["arsmodell"], b["verkstad_id"])
+        fm_key = (b["marke"], b["modell"], b["arsmodell"], b["verkstad_id"])
+        if fm_key not in fm_cache:
+            fm_cache[fm_key] = get_fordonsmodell_intervall(*fm_key)
+        fm_intervall = fm_cache[fm_key]
+        nyckel = "{} {}".format(b["marke"], b["modell"])
+        standard = fm_intervall if fm_intervall else STANDARD_INTERVALL.get(nyckel, {})
+        si_rader = si_map[b["id"]]
+        db_map_si = {r["service_typ"]: r for r in si_rader}
+        intervaller = {}
+        for t in NEDRAKNARE_TYPER:
+            if t in db_map_si:
+                r = db_map_si[t]
+                intervaller[t] = {"intervall": r["intervall_km"], "aktiv": bool(r["aktiv"])}
+            elif t in standard:
+                intervaller[t] = {"intervall": standard[t], "aktiv": standard[t] is not None}
+        for r in si_rader:
+            if r["service_typ"] not in NEDRAKNARE_TYPER and bool(r["aktiv"]):
+                intervaller[r["service_typ"]] = {"intervall": r["intervall_km"], "aktiv": True}
+        senaste_per_typ = {}
+        for h in handelser:
+            if h["service_typer"]:
+                for t in json.loads(h["service_typer"]):
+                    if t not in senaste_per_typ:
+                        senaste_per_typ[t] = h["km"]
         atgarder = []
-        for typ, info in panel.items():
-            diff = info["diff"]
+        for typ, info in intervaller.items():
+            if not info["aktiv"]:
+                continue
             iv = info["intervall"]
+            diff = (senaste_km - senaste_per_typ[typ]) if typ in senaste_per_typ else senaste_km
             if iv is None or diff is None:
                 continue
             if diff >= iv:
@@ -1351,6 +1447,7 @@ def login():
             user = User(row["id"], row["username"], row["namn"], row["roll"], row["verkstad_id"], slug)
             session.permanent = True
             login_user(user, remember=False)
+            session["session_token"] = row["session_token"]
             next_url = request.args.get("next")
             # Säker redirect: måste vara relativ URL på samma domän
             # Blockerar //evil.com, http://evil.com, javascript: etc.
@@ -1445,8 +1542,9 @@ def ny_anvandare():
 @app.route("/admin/byt-losenord/<int:anv_id>", methods=["POST"])
 @login_required
 def byt_losenord(anv_id):
-    if current_user.roll != "admin" and current_user.id != anv_id:
-        return redirect(url_for("index"))
+    # Non-admins changing their own password must use /mitt-konto (which requires the old password)
+    if current_user.roll != "admin":
+        return redirect(url_for("mitt_konto"))
     # Ensure target user belongs to the same verkstad (cross-tenant guard)
     with get_db() as conn:
         target = conn.execute("SELECT verkstad_id FROM anvandare WHERE id=?", (anv_id,)).fetchone()
@@ -1457,13 +1555,13 @@ def byt_losenord(anv_id):
     password = request.form.get("password","")
     if password:
         with get_db() as conn:
-            conn.execute(
-                "UPDATE anvandare SET password_hash=? WHERE id=? AND verkstad_id IS ?",
-                (generate_password_hash(password, method="pbkdf2:sha256"), anv_id, current_user.verkstad_id)
-            )
-            # Invalidate the target's active sessions
-            conn.execute("UPDATE anvandare SET session_token=NULL WHERE id=?", (anv_id,))
-    return redirect(url_for("admin") if current_user.roll == "admin" else url_for("index"))
+            rows = conn.execute(
+                "UPDATE anvandare SET password_hash=? WHERE id=?",
+                (generate_password_hash(password, method="pbkdf2:sha256"), anv_id)
+            ).rowcount
+            if rows:
+                conn.execute("UPDATE anvandare SET session_token=NULL WHERE id=?", (anv_id,))
+    return redirect(url_for("admin"))
 
 @app.route("/admin/ta-bort/<int:anv_id>", methods=["POST"])
 @login_required
@@ -1514,6 +1612,18 @@ if not SUPERADMIN_PASSWORD:
         "Sätt den i Azure App Service → Configuration → Application settings."
     )
 
+def require_superadmin():
+    """Kontrollerar superadmin-session och 30-minuters timeout. Returnerar redirect vid fel."""
+    if not session.get("superadmin"):
+        return redirect(url_for("superadmin_login"))
+    sa_last = session.get("superadmin_last_active")
+    if sa_last and (time.time() - sa_last) > 30 * 60:
+        session.pop("superadmin", None)
+        session.pop("superadmin_last_active", None)
+        return redirect(url_for("superadmin_login"))
+    session["superadmin_last_active"] = time.time()
+    return None
+
 @app.route("/superadmin/login", methods=["GET","POST"])
 def superadmin_login():
     ip = request.remote_addr
@@ -1542,15 +1652,9 @@ def superadmin_login():
 
 @app.route("/superadmin")
 def superadmin():
-    if not session.get("superadmin"):
-        return redirect(url_for("superadmin_login"))
-    # Session-timeout: 30 minuter inaktivitet
-    sa_last = session.get("superadmin_last_active")
-    if sa_last and (time.time() - sa_last) > 30 * 60:
-        session.pop("superadmin", None)
-        session.pop("superadmin_last_active", None)
-        return redirect(url_for("superadmin_login"))
-    session["superadmin_last_active"] = time.time()
+    redir = require_superadmin()
+    if redir:
+        return redir
     with get_db() as conn:
         verkstader = conn.execute("""
             SELECT v.*,
@@ -1575,39 +1679,48 @@ def superadmin():
 
 @app.route("/superadmin/ny", methods=["POST"])
 def superadmin_ny_verkstad():
-    if not session.get("superadmin"):
-        return redirect(url_for("superadmin_login"))
+    redir = require_superadmin()
+    if redir:
+        return redir
     namn     = request.form.get("namn","").strip()
     slug     = request.form.get("slug","").strip().lower().replace(" ","-")
     email    = request.form.get("email","").strip().lower()
     password = request.form.get("password","").strip()
     paket    = request.form.get("paket","bas")
-    if namn and slug and email and password:
-        try:
-            with get_db() as conn:
-                cur = conn.execute(
-                    "INSERT INTO verkstader (namn, slug, admin_email, paket, status, skapad) VALUES (?,?,?,?,?,?)",
-                    (namn, slug, email, paket, "aktiv", str(date.today()))
-                )
-                verkstad_id = cur.lastrowid
-                conn.execute(
-                    "INSERT INTO anvandare (username, namn, password_hash, roll, verkstad_id) VALUES (?,?,?,?,?)",
-                    (email, namn, generate_password_hash(password, method="pbkdf2:sha256"), "admin", verkstad_id)
-                )
-        except Exception as e:
-            pass
+    if not (namn and slug and email and password):
+        return redirect(url_for("superadmin", msg="Fel: alla fält är obligatoriska."))
+    try:
+        with get_db() as conn:
+            cur = conn.execute(
+                "INSERT INTO verkstader (namn, slug, admin_email, paket, status, skapad) VALUES (?,?,?,?,?,?)",
+                (namn, slug, email, paket, "aktiv", str(date.today()))
+            )
+            verkstad_id = cur.lastrowid
+            conn.execute(
+                "INSERT INTO anvandare (username, namn, password_hash, roll, verkstad_id) VALUES (?,?,?,?,?)",
+                (email, namn, generate_password_hash(password, method="pbkdf2:sha256"), "admin", verkstad_id)
+            )
+    except sqlite3.IntegrityError as e:
+        fel = str(e)
+        if "slug" in fel or "verkstader" in fel:
+            msg = f"Fel: slug '{slug}' används redan."
+        elif "username" in fel or "anvandare" in fel:
+            msg = f"Fel: e-postadressen '{email}' används redan."
         else:
-            # Skicka välkomstmail till ny kund
-            html = valkomstmail_html(namn, slug, email, password, paket)
-            skickat = send_email(email, "Välkommen till RevvBase!", html)
-            if not skickat:
-                print(f"Välkomstmail kunde ej skickas till {email}")
-    return redirect(url_for("superadmin"))
+            msg = f"Fel: {fel}"
+        return redirect(url_for("superadmin", msg=msg))
+    # Skicka välkomstmail till ny kund
+    html = valkomstmail_html(namn, slug, email, password, paket)
+    skickat = send_email(email, "Välkommen till RevvBase!", html)
+    if not skickat:
+        print(f"Välkomstmail kunde ej skickas till {email}")
+    return redirect(url_for("superadmin", msg=f"✓ Verkstad '{namn}' skapad!"))
 
 @app.route("/superadmin/pausa/<int:vid>", methods=["POST"])
 def superadmin_pausa(vid):
-    if not session.get("superadmin"):
-        return redirect(url_for("superadmin_login"))
+    redir = require_superadmin()
+    if redir:
+        return redir
     with get_db() as conn:
         v = conn.execute("SELECT status FROM verkstader WHERE id=?", (vid,)).fetchone()
         ny_status = "pausad" if v["status"] == "aktiv" else "aktiv"
@@ -1616,8 +1729,9 @@ def superadmin_pausa(vid):
 
 @app.route("/superadmin/ta-bort/<int:vid>", methods=["POST"])
 def superadmin_ta_bort(vid):
-    if not session.get("superadmin"):
-        return redirect(url_for("superadmin_login"))
+    redir = require_superadmin()
+    if redir:
+        return redir
     with get_db() as conn:
         conn.execute("DELETE FROM anvandare WHERE verkstad_id=?", (vid,))
         conn.execute("DELETE FROM verkstader WHERE id=?", (vid,))
@@ -1625,8 +1739,9 @@ def superadmin_ta_bort(vid):
 
 @app.route("/superadmin/redigera/<int:vid>", methods=["POST"])
 def superadmin_redigera(vid):
-    if not session.get("superadmin"):
-        return redirect(url_for("superadmin_login"))
+    redir = require_superadmin()
+    if redir:
+        return redir
     namn  = request.form.get("namn","").strip()
     slug  = request.form.get("slug","").strip().lower().replace(" ","-")
     email = request.form.get("email","").strip().lower()
@@ -1642,8 +1757,9 @@ def superadmin_redigera(vid):
 
 @app.route("/superadmin/paket", methods=["GET","POST"])
 def superadmin_paket():
-    if not session.get("superadmin"):
-        return redirect(url_for("superadmin_login"))
+    redir = require_superadmin()
+    if redir:
+        return redir
     if request.method == "POST":
         for paket in ["bas", "standard", "pro"]:
             max_anv  = request.form.get(f"{paket}_max_anvandare", "1").strip()
@@ -1674,8 +1790,9 @@ def superadmin_paket():
 
 @app.route("/superadmin/byt-losenord/<int:vid>", methods=["POST"])
 def superadmin_byt_losenord(vid):
-    if not session.get("superadmin"):
-        return redirect(url_for("superadmin_login"))
+    redir = require_superadmin()
+    if redir:
+        return redir
     nytt_losenord = request.form.get("nytt_losenord", "").strip()
     if not nytt_losenord:
         return redirect(url_for("superadmin", msg="Lösenordet får inte vara tomt."))
@@ -1683,11 +1800,14 @@ def superadmin_byt_losenord(vid):
     from werkzeug.security import generate_password_hash
     ny_hash = generate_password_hash(nytt_losenord, method="pbkdf2:sha256")
     with get_db() as conn:
-        # Uppdatera admin-användaren för denna verkstad
         rows = conn.execute(
             "UPDATE anvandare SET password_hash=? WHERE verkstad_id=? AND roll='admin'",
             (ny_hash, vid)
         ).rowcount
+        if rows:
+            conn.execute(
+                "UPDATE anvandare SET session_token=NULL WHERE verkstad_id=? AND roll='admin'", (vid,)
+            )
     if rows:
         return redirect(url_for("superadmin", msg="✓ Lösenordet är uppdaterat!"))
     return redirect(url_for("superadmin", msg="Ingen admin-användare hittades för den verkstaden."))
