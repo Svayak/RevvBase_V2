@@ -105,6 +105,17 @@ def load_user(user_id):
             slug = v["slug"] if v else None
     return User(row["id"], row["username"], row["namn"], row["roll"], row["verkstad_id"], slug)
 
+@app.before_request
+def validate_session_token():
+    if current_user.is_authenticated:
+        stored = session.get("session_token")
+        if stored:
+            with get_db() as conn:
+                row = conn.execute("SELECT session_token FROM anvandare WHERE id=?", (current_user.id,)).fetchone()
+            if not row or row["session_token"] != stored:
+                logout_user()
+                return redirect(url_for("login"))
+
 # ── HJÄLPFUNKTIONER ───────────────────────────────────────────────────────────
 BACKUP_DIR = os.environ.get("BACKUP_DIR", "/home/data/säkerhetskopior")
 
@@ -294,6 +305,9 @@ def init_db():
         except: pass
         try:
             conn.execute("ALTER TABLE anvandare ADD COLUMN senaste_inloggning TEXT")
+        except: pass
+        try:
+            conn.execute("ALTER TABLE anvandare ADD COLUMN session_token TEXT")
         except: pass
         try:
             conn.executescript("""
@@ -1433,11 +1447,22 @@ def ny_anvandare():
 def byt_losenord(anv_id):
     if current_user.roll != "admin" and current_user.id != anv_id:
         return redirect(url_for("index"))
+    # Ensure target user belongs to the same verkstad (cross-tenant guard)
+    with get_db() as conn:
+        target = conn.execute("SELECT verkstad_id FROM anvandare WHERE id=?", (anv_id,)).fetchone()
+    if not target:
+        return redirect(url_for("index"))
+    if current_user.verkstad_id is not None and target["verkstad_id"] != current_user.verkstad_id:
+        abort(403)
     password = request.form.get("password","")
     if password:
         with get_db() as conn:
-            conn.execute("UPDATE anvandare SET password_hash=? WHERE id=?",
-                (generate_password_hash(password, method="pbkdf2:sha256"), anv_id))
+            conn.execute(
+                "UPDATE anvandare SET password_hash=? WHERE id=? AND verkstad_id IS ?",
+                (generate_password_hash(password, method="pbkdf2:sha256"), anv_id, current_user.verkstad_id)
+            )
+            # Invalidate the target's active sessions
+            conn.execute("UPDATE anvandare SET session_token=NULL WHERE id=?", (anv_id,))
     return redirect(url_for("admin") if current_user.roll == "admin" else url_for("index"))
 
 @app.route("/admin/ta-bort/<int:anv_id>", methods=["POST"])
@@ -1447,7 +1472,8 @@ def ta_bort_anvandare(anv_id):
         return redirect(url_for("index"))
     if anv_id != current_user.id:
         with get_db() as conn:
-            conn.execute("DELETE FROM anvandare WHERE id=?", (anv_id,))
+            conn.execute("DELETE FROM anvandare WHERE id=? AND verkstad_id IS ?",
+                (anv_id, current_user.verkstad_id))
     return redirect(url_for("admin"))
 
 @app.route("/mitt-konto", methods=["GET","POST"])

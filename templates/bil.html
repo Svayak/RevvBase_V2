@@ -117,7 +117,7 @@
         <div class="service-tags" id="tags-{{ h.id }}"></div>
         <script>
           (function(){
-            var raw = {{ h.service_typer | safe }};
+            var raw = {{ h.service_typer | tojson }};
             var cont = document.getElementById('tags-{{ h.id }}');
             raw.forEach(function(t){ var s=document.createElement('span'); s.className='service-tag'; s.textContent=t; cont.appendChild(s); });
           })();

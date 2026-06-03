@@ -47,7 +47,7 @@
           <span id="st-{{ h.id }}"></span>
           <script>
             (function(){
-              var raw = {{ h.service_typer | safe }};
+              var raw = {{ h.service_typer | tojson }};
               document.getElementById('st-{{ h.id }}').textContent = raw.join(', ');
             })();
           </script>
