@@ -706,9 +706,16 @@ def ny_bil():
         return pausad
     error = None
     with get_db() as conn:
-        bibliotek = conn.execute(
-            "SELECT f.*, GROUP_CONCAT(fi.service_typ || ':' || COALESCE(fi.intervall_km,'') || ':' || fi.aktiv, '|') as intervall_str FROM fordonsmodeller f LEFT JOIN fordonsmodell_intervall fi ON fi.fordonsmodell_id=f.id GROUP BY f.id ORDER BY f.marke, f.modell, f.arsmodell"
-        ).fetchall()
+        vid = current_user.verkstad_id
+        if vid is not None:
+            bibliotek = conn.execute(
+                "SELECT f.*, GROUP_CONCAT(fi.service_typ || ':' || COALESCE(fi.intervall_km,'') || ':' || fi.aktiv, '|') as intervall_str FROM fordonsmodeller f LEFT JOIN fordonsmodell_intervall fi ON fi.fordonsmodell_id=f.id WHERE f.verkstad_id=? GROUP BY f.id ORDER BY f.marke, f.modell, f.arsmodell",
+                (vid,)
+            ).fetchall()
+        else:
+            bibliotek = conn.execute(
+                "SELECT f.*, GROUP_CONCAT(fi.service_typ || ':' || COALESCE(fi.intervall_km,'') || ':' || fi.aktiv, '|') as intervall_str FROM fordonsmodeller f LEFT JOIN fordonsmodell_intervall fi ON fi.fordonsmodell_id=f.id GROUP BY f.id ORDER BY f.marke, f.modell, f.arsmodell"
+            ).fetchall()
 
     if request.method == "POST":
         regnr         = request.form.get("regnr","").strip().upper()
@@ -1174,10 +1181,17 @@ def arbetsorder():
 @app.route("/fordonsbibliotek")
 @login_required
 def fordonsbibliotek():
+    vid = current_user.verkstad_id
     with get_db() as conn:
-        modeller = conn.execute(
-            "SELECT f.*, GROUP_CONCAT(fi.service_typ || ':' || COALESCE(fi.intervall_km,'') || ':' || fi.aktiv, '|') as intervall_str FROM fordonsmodeller f LEFT JOIN fordonsmodell_intervall fi ON fi.fordonsmodell_id=f.id GROUP BY f.id ORDER BY f.marke, f.modell, f.arsmodell"
-        ).fetchall()
+        if vid is not None:
+            modeller = conn.execute(
+                "SELECT f.*, GROUP_CONCAT(fi.service_typ || ':' || COALESCE(fi.intervall_km,'') || ':' || fi.aktiv, '|') as intervall_str FROM fordonsmodeller f LEFT JOIN fordonsmodell_intervall fi ON fi.fordonsmodell_id=f.id WHERE f.verkstad_id=? GROUP BY f.id ORDER BY f.marke, f.modell, f.arsmodell",
+                (vid,)
+            ).fetchall()
+        else:
+            modeller = conn.execute(
+                "SELECT f.*, GROUP_CONCAT(fi.service_typ || ':' || COALESCE(fi.intervall_km,'') || ':' || fi.aktiv, '|') as intervall_str FROM fordonsmodeller f LEFT JOIN fordonsmodell_intervall fi ON fi.fordonsmodell_id=f.id GROUP BY f.id ORDER BY f.marke, f.modell, f.arsmodell"
+            ).fetchall()
     return render_template("fordonsbibliotek.html", modeller=modeller, nedraknare_typer=NEDRAKNARE_TYPER)
 
 @app.route("/fordonsbibliotek/ny", methods=["GET","POST"])
@@ -1220,10 +1234,17 @@ def ny_fordonsmodell():
                 return redirect(url_for("fordonsbibliotek"))
             except Exception as e:
                 error = f"Kunde inte spara: {e}"
+    vid2 = current_user.verkstad_id
     with get_db() as conn:
-        bibliotek = conn.execute(
-            "SELECT f.*, GROUP_CONCAT(fi.service_typ || ':' || COALESCE(fi.intervall_km,'') || ':' || fi.aktiv, '|') as intervall_str FROM fordonsmodeller f LEFT JOIN fordonsmodell_intervall fi ON fi.fordonsmodell_id=f.id GROUP BY f.id ORDER BY f.marke, f.modell, f.arsmodell"
-        ).fetchall()
+        if vid2 is not None:
+            bibliotek = conn.execute(
+                "SELECT f.*, GROUP_CONCAT(fi.service_typ || ':' || COALESCE(fi.intervall_km,'') || ':' || fi.aktiv, '|') as intervall_str FROM fordonsmodeller f LEFT JOIN fordonsmodell_intervall fi ON fi.fordonsmodell_id=f.id WHERE f.verkstad_id=? GROUP BY f.id ORDER BY f.marke, f.modell, f.arsmodell",
+                (vid2,)
+            ).fetchall()
+        else:
+            bibliotek = conn.execute(
+                "SELECT f.*, GROUP_CONCAT(fi.service_typ || ':' || COALESCE(fi.intervall_km,'') || ':' || fi.aktiv, '|') as intervall_str FROM fordonsmodeller f LEFT JOIN fordonsmodell_intervall fi ON fi.fordonsmodell_id=f.id GROUP BY f.id ORDER BY f.marke, f.modell, f.arsmodell"
+            ).fetchall()
     return render_template("ny_fordonsmodell.html", error=error,
         nedraknare_typer=NEDRAKNARE_TYPER, bibliotek=bibliotek)
 
