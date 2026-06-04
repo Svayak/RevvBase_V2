@@ -44,13 +44,8 @@
     {% endif %}
     <div class="mil-card mil-card--{{ status }}">
       <div class="mil-card__label">{{ typ }}</div>
-      {% if iv is none %}
-        <div class="mil-card__value">–</div>
-        <div class="mil-card__sub">Kedjedrift</div>
-      {% else %}
-        <div class="mil-card__value">{{ diff if diff is not none else '?' }}</div>
-        <div class="mil-card__sub">/ {{ iv }} km{% if aldrig %}*{% endif %}</div>
-      {% endif %}
+      <div class="mil-card__value">{{ diff if diff is not none else '?' }}</div>
+      <div class="mil-card__sub">/ {{ iv }} km{% if aldrig %}*{% endif %}</div>
     </div>
     {% endfor %}
   </div>

@@ -384,7 +384,15 @@ def get_intervall(bil_id, marke, modell, arsmodell=None, verkstad_id=None):
             r = db_map[t]
             result[t] = {"intervall": r["intervall_km"], "aktiv": bool(r["aktiv"]), "egen": False}
         elif t in standard:
-            result[t] = {"intervall": standard[t], "aktiv": standard[t] is not None, "egen": False}
+            std = standard[t]
+            # standard[t] kan vara en dict (från fordonsmodell_intervall) eller ett heltal (från STANDARD_INTERVALL)
+            if isinstance(std, dict):
+                iv_km = std.get("intervall")
+                iv_aktiv = std.get("aktiv", True)
+            else:
+                iv_km = std
+                iv_aktiv = std is not None
+            result[t] = {"intervall": iv_km, "aktiv": iv_aktiv, "egen": False}
     for r in rader:
         if r["service_typ"] not in NEDRAKNARE_TYPER and bool(r["aktiv"]):
             result[r["service_typ"]] = {"intervall": r["intervall_km"], "aktiv": True, "egen": True}

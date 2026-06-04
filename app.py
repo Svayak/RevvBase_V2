@@ -429,6 +429,9 @@ def bygg_panel(bil_id, marke, modell, handelser, senaste_km, arsmodell=None, ver
         if not info["aktiv"]:
             continue
         iv = info["intervall"]
+        # Ingen km angiven = visa inte på bilkortet
+        if iv is None:
+            continue
         if t in senaste_per_typ:
             diff = (senaste_km - senaste_per_typ[t]) if senaste_km is not None else None
             aldrig_gjort = False
