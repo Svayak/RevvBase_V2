@@ -3,9 +3,9 @@
 {% block content %}
 <div class="page-header">
   <h1 class="page-title">Bilar i systemet</h1>
-  <form class="search-form" method="get" action="{{ request.path }}">
+  <form class="search-form" method="get" action="{{ url_for('index') }}">
     <input class="search-input" type="text" name="q" value="{{ q }}" placeholder="Sök reg.nr, fordonsnr, märke…" autocomplete="off">
-    {% if q %}<a href="{{ request.path }}" class="clear-search">✕</a>{% endif %}
+    {% if q %}<a href="{{ url_for('index') }}" class="clear-search">✕</a>{% endif %}
   </form>
   <a href="{{ url_for('importera_miltal') }}" class="btn btn-ghost btn-sm">📥 Importera miltal</a>
 </div>
@@ -30,7 +30,7 @@
 <div class="empty-state">
   {% if q %}
     <p>Inga bilar matchade sökningen.</p>
-    <a href="{{ request.path }}" class="btn btn-ghost">Visa alla</a>
+    <a href="{{ url_for('index') }}" class="btn btn-ghost">Visa alla</a>
   {% else %}
     <p>Inga bilar inlagda ännu.</p>
     <a href="{{ url_for('ny_bil') }}" class="btn btn-primary">Lägg till första bilen</a>
