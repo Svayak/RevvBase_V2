@@ -135,6 +135,58 @@ NEDRAKNARE_TYPER = [
     "Luftfilter", "Kylvätska",
 ]
 
+# Standarderna ovan används som fallback tills en verkstad sparat egna via admin.
+
+def _hamta_servicetyper_rader(verkstad_id):
+    """Alla servicetyprader för en verkstad ur DB (id, namn, har_intervall, standard_km), i ordning."""
+    with get_db() as conn:
+        if verkstad_id is None:
+            return conn.execute(
+                "SELECT id, namn, har_intervall, standard_km FROM servicetyper WHERE verkstad_id IS NULL AND kategori='service' ORDER BY ordning, id"
+            ).fetchall()
+        return conn.execute(
+            "SELECT id, namn, har_intervall, standard_km FROM servicetyper WHERE verkstad_id=? AND kategori='service' ORDER BY ordning, id",
+            (verkstad_id,)
+        ).fetchall()
+
+def get_nedraknare_standardkm(verkstad_id):
+    """{namn: standard_km} för typer med km-intervall (None om inget förval satt)."""
+    return {r["namn"]: r["standard_km"] for r in _hamta_servicetyper_rader(verkstad_id) if r["har_intervall"]}
+
+def get_service_typer(verkstad_id):
+    """Alla servicetyper (väljs när en utförd service loggas). Fallback: hårdkodad standard."""
+    rader = _hamta_servicetyper_rader(verkstad_id)
+    if rader:
+        return [r["namn"] for r in rader]
+    return list(SERVICE_TYPER)
+
+def get_nedraknare_typer(verkstad_id):
+    """Typerna med km-intervall (km-checkboxar vid ny bil/modell). Fallback: hårdkodad standard."""
+    rader = _hamta_servicetyper_rader(verkstad_id)
+    if rader:
+        return [r["namn"] for r in rader if r["har_intervall"]]
+    return list(NEDRAKNARE_TYPER)
+
+def sakerstall_servicetyper_seedade(verkstad_id):
+    """Kopierar hårdkodad standard till DB första gången (så listan blir redigerbar).
+    En lista: alla SERVICE_TYPER, där de i NEDRAKNARE_TYPER får km-intervall-flaggan."""
+    with get_db() as conn:
+        if verkstad_id is None:
+            finns = conn.execute(
+                "SELECT 1 FROM servicetyper WHERE verkstad_id IS NULL AND kategori='service' LIMIT 1"
+            ).fetchone()
+        else:
+            finns = conn.execute(
+                "SELECT 1 FROM servicetyper WHERE verkstad_id=? AND kategori='service' LIMIT 1",
+                (verkstad_id,)
+            ).fetchone()
+        if not finns:
+            for i, namn in enumerate(SERVICE_TYPER):
+                conn.execute(
+                    "INSERT INTO servicetyper (verkstad_id, kategori, namn, ordning, har_intervall) VALUES (?,?,?,?,?)",
+                    (verkstad_id, "service", namn, i, 1 if namn in NEDRAKNARE_TYPER else 0)
+                )
+
 STANDARD_INTERVALL = {
     "Ford Transit": {
         "Oljebyte": 15000, "Kamrem": 100000,
@@ -363,6 +415,55 @@ def init_db():
                 ('standard', 5, 20, 0, 0, 599),
                 ('pro', 9999, 9999, 1, 1, 999);
         """)
+        # Redigerbara servicetyper per verkstad (en lista).
+        # har_intervall=1 → visas som km-checkbox vid ny bil/modell (nedräkning).
+        # Alla typer visas vid loggning av utförd service.
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS servicetyper (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                verkstad_id INTEGER,
+                kategori TEXT NOT NULL,
+                namn TEXT NOT NULL,
+                ordning INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        try:
+            conn.execute("ALTER TABLE servicetyper ADD COLUMN har_intervall INTEGER NOT NULL DEFAULT 0")
+        except: pass
+        try:
+            conn.execute("ALTER TABLE servicetyper ADD COLUMN standard_km INTEGER")
+        except: pass
+        # Migrering: slå ihop gamla tvålist-modellen ('intervall'/'service') till en lista.
+        try:
+            har_gamla = conn.execute(
+                "SELECT 1 FROM servicetyper WHERE kategori='intervall' LIMIT 1"
+            ).fetchone()
+            if har_gamla:
+                # Se till att alla intervall-typer finns i huvudlistan
+                conn.execute("""
+                    INSERT INTO servicetyper (verkstad_id, kategori, namn, ordning, har_intervall)
+                    SELECT i.verkstad_id, 'service', i.namn, i.ordning, 1
+                    FROM servicetyper i
+                    WHERE i.kategori='intervall'
+                      AND NOT EXISTS (
+                        SELECT 1 FROM servicetyper s
+                        WHERE s.kategori='service' AND s.namn=i.namn
+                          AND ((s.verkstad_id IS NULL AND i.verkstad_id IS NULL) OR s.verkstad_id=i.verkstad_id)
+                      )
+                """)
+                # Markera km-flaggan på huvudlistan för de namn som fanns som intervall
+                conn.execute("""
+                    UPDATE servicetyper SET har_intervall=1
+                    WHERE kategori='service' AND EXISTS (
+                        SELECT 1 FROM servicetyper i
+                        WHERE i.kategori='intervall' AND i.namn=servicetyper.namn
+                          AND ((i.verkstad_id IS NULL AND servicetyper.verkstad_id IS NULL) OR i.verkstad_id=servicetyper.verkstad_id)
+                    )
+                """)
+                # Ta bort de gamla intervall-raderna
+                conn.execute("DELETE FROM servicetyper WHERE kategori='intervall'")
+        except Exception as e:
+            print(f"Migration servicetyper: {e}")
 
 def get_fordonsmodell_intervall(marke, modell, arsmodell, verkstad_id=None):
     with get_db() as conn:
@@ -394,7 +495,8 @@ def get_intervall(bil_id, marke, modell, arsmodell=None, verkstad_id=None):
         ).fetchall()
     result = {}
     db_map = {r["service_typ"]: r for r in rader}
-    for t in NEDRAKNARE_TYPER:
+    nedraknare = get_nedraknare_typer(verkstad_id)
+    for t in nedraknare:
         if t in db_map:
             r = db_map[t]
             result[t] = {"intervall": r["intervall_km"], "aktiv": bool(r["aktiv"]), "egen": False}
@@ -409,17 +511,18 @@ def get_intervall(bil_id, marke, modell, arsmodell=None, verkstad_id=None):
                 iv_aktiv = std is not None
             result[t] = {"intervall": iv_km, "aktiv": iv_aktiv, "egen": False}
     for r in rader:
-        if r["service_typ"] not in NEDRAKNARE_TYPER and bool(r["aktiv"]):
+        if r["service_typ"] not in nedraknare and bool(r["aktiv"]):
             result[r["service_typ"]] = {"intervall": r["intervall_km"], "aktiv": True, "egen": True}
     return result
 
-def spara_intervall(bil_id, intervall_dict):
+def spara_intervall(bil_id, intervall_dict, verkstad_id=None):
+    nedraknare = get_nedraknare_typer(verkstad_id)
     with get_db() as conn:
         egna_nya = [t for t, v in intervall_dict.items() if v.get("egen")]
         befintliga_egna = conn.execute(
             "SELECT service_typ FROM serviceintervall WHERE bil_id=? AND service_typ NOT IN ({})".format(
-                ",".join("?" * len(NEDRAKNARE_TYPER))
-            ), [bil_id] + NEDRAKNARE_TYPER
+                ",".join("?" * len(nedraknare)) if nedraknare else "''"
+            ), [bil_id] + nedraknare
         ).fetchall()
         for r in befintliga_egna:
             if r["service_typ"] not in egna_nya:
@@ -784,10 +887,12 @@ def ny_bil():
                         bil_id = cur.lastrowid
 
                     iv_dict = {}
-                    for t in NEDRAKNARE_TYPER:
+                    standardkm = get_nedraknare_standardkm(vid)
+                    for t in get_nedraknare_typer(vid):
                         aktiv = request.form.get(f"aktiv_{t}") == "1"
                         iv_str = request.form.get(f"iv_{t}", "").strip()
-                        iv_km = int(iv_str) if iv_str.isdigit() else None
+                        # Tomt fält → använd verkstadens förval för typen
+                        iv_km = int(iv_str) if iv_str.isdigit() else standardkm.get(t)
                         iv_dict[t] = {"intervall": iv_km, "aktiv": aktiv, "egen": False}
                     egna_namn = request.form.getlist("egen_namn")
                     egna_km   = request.form.getlist("egen_km")
@@ -795,7 +900,7 @@ def ny_bil():
                         namn = namn.strip()
                         if namn and km_str.strip().isdigit():
                             iv_dict[namn] = {"intervall": int(km_str), "aktiv": True, "egen": True}
-                    spara_intervall(bil_id, iv_dict)
+                    spara_intervall(bil_id, iv_dict, vid)
 
                     with get_db() as conn:
                         befintlig = conn.execute(
@@ -819,7 +924,8 @@ def ny_bil():
                     error = f"Reg.nr {regnr} finns redan i systemet."
 
     return render_template("ny_bil.html", error=error,
-        nedraknare_typer=NEDRAKNARE_TYPER, bibliotek=bibliotek)
+        nedraknare_typer=get_nedraknare_typer(current_user.verkstad_id),
+        nedraknare_standard=get_nedraknare_standardkm(current_user.verkstad_id), bibliotek=bibliotek)
 
 @app.route("/bil/<int:bil_id>")
 @login_required
@@ -847,7 +953,7 @@ def bil(bil_id):
     panel = bygg_panel(bil_id, b["marke"], b["modell"], alla_handelser, senaste_km, b["arsmodell"], b["verkstad_id"])
     return render_template("bil.html", bil=b, handelser=handelser,
         panel=panel, senaste_km=senaste_km,
-        service_typer=SERVICE_TYPER, filter_typ=filter_typ,
+        service_typer=get_service_typer(b["verkstad_id"]), filter_typ=filter_typ,
         kommentarer=kommentarer)
 
 @app.route("/bil/<int:bil_id>/redigera", methods=["GET","POST"])
@@ -871,7 +977,7 @@ def redigera_bil(bil_id):
                     (marke, modell, fordonsnummer or None, arsmodell or None, notering, bil_id)
                 )
             iv_dict = {}
-            for t in NEDRAKNARE_TYPER:
+            for t in get_nedraknare_typer(b["verkstad_id"]):
                 aktiv = request.form.get(f"aktiv_{t}") == "1"
                 iv_str = request.form.get(f"iv_{t}", "").strip()
                 iv_km = int(iv_str) if iv_str.isdigit() else None
@@ -882,18 +988,20 @@ def redigera_bil(bil_id):
                 namn = namn.strip()
                 if namn and km_str.strip().isdigit():
                     iv_dict[namn] = {"intervall": int(km_str), "aktiv": True, "egen": True}
-            spara_intervall(bil_id, iv_dict)
+            spara_intervall(bil_id, iv_dict, b["verkstad_id"])
             return redirect(url_for("bil", bil_id=bil_id))
     return render_template("redigera_bil.html", bil=b, error=error,
-        intervaller=intervaller, nedraknare_typer=NEDRAKNARE_TYPER)
+        intervaller=intervaller, nedraknare_typer=get_nedraknare_typer(b["verkstad_id"]))
 
 @app.route("/bil/<int:bil_id>/ny-handelse", methods=["GET","POST"])
 @login_required
 def ny_handelse(bil_id):
     b = check_bil_access(bil_id)
     intervaller = get_intervall(bil_id, b["marke"], b["modell"], b["arsmodell"], b["verkstad_id"])
-    egna_typer = [t for t in intervaller if t not in NEDRAKNARE_TYPER and intervaller[t].get("aktiv")]
-    alla_service_typer = SERVICE_TYPER + [t for t in egna_typer if t not in SERVICE_TYPER]
+    service_typer_bas = get_service_typer(b["verkstad_id"])
+    nedraknare = get_nedraknare_typer(b["verkstad_id"])
+    egna_typer = [t for t in intervaller if t not in nedraknare and intervaller[t].get("aktiv")]
+    alla_service_typer = service_typer_bas + [t for t in egna_typer if t not in service_typer_bas]
     steg = request.args.get("steg", "1")
     km   = request.args.get("km", "")
     error = None
@@ -972,8 +1080,10 @@ def redigera_handelse(bil_id, h_id):
                 )
             return redirect(url_for("bil", bil_id=bil_id))
 
+    service_typer = get_service_typer(b["verkstad_id"])
+    service_typer = service_typer + [t for t in service_typer_vald if t not in service_typer]
     return render_template("redigera_handelse.html", bil=b, h=h,
-        service_typer=SERVICE_TYPER, service_typer_vald=service_typer_vald, error=error)
+        service_typer=service_typer, service_typer_vald=service_typer_vald, error=error)
 
 @app.route("/bil/<int:bil_id>/ny-kommentar", methods=["POST"])
 @login_required
@@ -1062,6 +1172,7 @@ def kommande():
     for si in alla_si:
         si_map[si["bil_id"]].append(si)
     fm_cache = {}
+    nedr_cache = {}
 
     bilar_service = []
     for b in bilar:
@@ -1076,17 +1187,24 @@ def kommande():
         fm_intervall = fm_cache[fm_key]
         nyckel = "{} {}".format(b["marke"], b["modell"])
         standard = fm_intervall if fm_intervall else STANDARD_INTERVALL.get(nyckel, {})
+        if b["verkstad_id"] not in nedr_cache:
+            nedr_cache[b["verkstad_id"]] = get_nedraknare_typer(b["verkstad_id"])
+        nedraknare = nedr_cache[b["verkstad_id"]]
         si_rader = si_map[b["id"]]
         db_map_si = {r["service_typ"]: r for r in si_rader}
         intervaller = {}
-        for t in NEDRAKNARE_TYPER:
+        for t in nedraknare:
             if t in db_map_si:
                 r = db_map_si[t]
                 intervaller[t] = {"intervall": r["intervall_km"], "aktiv": bool(r["aktiv"])}
             elif t in standard:
-                intervaller[t] = {"intervall": standard[t], "aktiv": standard[t] is not None}
+                std = standard[t]
+                if isinstance(std, dict):
+                    intervaller[t] = {"intervall": std.get("intervall"), "aktiv": std.get("aktiv", True)}
+                else:
+                    intervaller[t] = {"intervall": std, "aktiv": std is not None}
         for r in si_rader:
-            if r["service_typ"] not in NEDRAKNARE_TYPER and bool(r["aktiv"]):
+            if r["service_typ"] not in nedraknare and bool(r["aktiv"]):
                 intervaller[r["service_typ"]] = {"intervall": r["intervall_km"], "aktiv": True}
         # Build service panel
         senaste_per_typ = {}
@@ -1159,6 +1277,7 @@ def arbetsorder():
     for si in alla_si:
         si_map[si["bil_id"]].append(si)
     fm_cache = {}
+    nedr_cache = {}
 
     bilar_data = []
     for b in bilar:
@@ -1172,17 +1291,24 @@ def arbetsorder():
         fm_intervall = fm_cache[fm_key]
         nyckel = "{} {}".format(b["marke"], b["modell"])
         standard = fm_intervall if fm_intervall else STANDARD_INTERVALL.get(nyckel, {})
+        if b["verkstad_id"] not in nedr_cache:
+            nedr_cache[b["verkstad_id"]] = get_nedraknare_typer(b["verkstad_id"])
+        nedraknare = nedr_cache[b["verkstad_id"]]
         si_rader = si_map[b["id"]]
         db_map_si = {r["service_typ"]: r for r in si_rader}
         intervaller = {}
-        for t in NEDRAKNARE_TYPER:
+        for t in nedraknare:
             if t in db_map_si:
                 r = db_map_si[t]
                 intervaller[t] = {"intervall": r["intervall_km"], "aktiv": bool(r["aktiv"])}
             elif t in standard:
-                intervaller[t] = {"intervall": standard[t], "aktiv": standard[t] is not None}
+                std = standard[t]
+                if isinstance(std, dict):
+                    intervaller[t] = {"intervall": std.get("intervall"), "aktiv": std.get("aktiv", True)}
+                else:
+                    intervaller[t] = {"intervall": std, "aktiv": std is not None}
         for r in si_rader:
-            if r["service_typ"] not in NEDRAKNARE_TYPER and bool(r["aktiv"]):
+            if r["service_typ"] not in nedraknare and bool(r["aktiv"]):
                 intervaller[r["service_typ"]] = {"intervall": r["intervall_km"], "aktiv": True}
         senaste_per_typ = {}
         for h in handelser:
@@ -1225,7 +1351,7 @@ def fordonsbibliotek():
             modeller = conn.execute(
                 "SELECT f.*, GROUP_CONCAT(fi.service_typ || ':' || COALESCE(fi.intervall_km,'') || ':' || fi.aktiv, '|') as intervall_str FROM fordonsmodeller f LEFT JOIN fordonsmodell_intervall fi ON fi.fordonsmodell_id=f.id GROUP BY f.id ORDER BY f.marke, f.modell, f.arsmodell"
             ).fetchall()
-    return render_template("fordonsbibliotek.html", modeller=modeller, nedraknare_typer=NEDRAKNARE_TYPER)
+    return render_template("fordonsbibliotek.html", modeller=modeller, nedraknare_typer=get_nedraknare_typer(vid))
 
 @app.route("/fordonsbibliotek/ny", methods=["GET","POST"])
 @login_required
@@ -1247,7 +1373,7 @@ def ny_fordonsmodell():
                         (marke, modell, ar, vid)
                     )
                     fm_id = cur.lastrowid
-                    for t in NEDRAKNARE_TYPER:
+                    for t in get_nedraknare_typer(vid):
                         aktiv = request.form.get(f"aktiv_{t}") == "1"
                         iv_str = request.form.get(f"iv_{t}","").strip()
                         iv_km = int(iv_str) if iv_str.isdigit() else None
@@ -1279,7 +1405,7 @@ def ny_fordonsmodell():
                 "SELECT f.*, GROUP_CONCAT(fi.service_typ || ':' || COALESCE(fi.intervall_km,'') || ':' || fi.aktiv, '|') as intervall_str FROM fordonsmodeller f LEFT JOIN fordonsmodell_intervall fi ON fi.fordonsmodell_id=f.id GROUP BY f.id ORDER BY f.marke, f.modell, f.arsmodell"
             ).fetchall()
     return render_template("ny_fordonsmodell.html", error=error,
-        nedraknare_typer=NEDRAKNARE_TYPER, bibliotek=bibliotek)
+        nedraknare_typer=get_nedraknare_typer(vid2), bibliotek=bibliotek)
 
 @app.route("/fordonsbibliotek/<int:fm_id>/redigera", methods=["GET","POST"])
 @login_required
@@ -1307,12 +1433,13 @@ def redigera_fordonsmodell(fm_id):
         else:
             ar = int(arsmodell) if arsmodell.isdigit() else None
             iv_dict = {}
+            nedraknare = get_nedraknare_typer(vid)
             with get_db() as conn:
                 conn.execute(
                     "UPDATE fordonsmodeller SET marke=?, modell=?, arsmodell=? WHERE id=?",
                     (marke, modell, ar, fm_id)
                 )
-                for t in NEDRAKNARE_TYPER:
+                for t in nedraknare:
                     aktiv = request.form.get(f"aktiv_{t}") == "1"
                     iv_str = request.form.get(f"iv_{t}","").strip()
                     iv_km = int(iv_str) if iv_str.isdigit() else None
@@ -1323,8 +1450,8 @@ def redigera_fordonsmodell(fm_id):
                     )
                 conn.execute(
                     "DELETE FROM fordonsmodell_intervall WHERE fordonsmodell_id=? AND service_typ NOT IN ({})".format(
-                        ",".join("?" * len(NEDRAKNARE_TYPER))
-                    ), [fm_id] + NEDRAKNARE_TYPER
+                        ",".join("?" * len(nedraknare)) if nedraknare else "''"
+                    ), [fm_id] + nedraknare
                 )
                 egna_namn = request.form.getlist("egen_namn")
                 egna_km   = request.form.getlist("egen_km")
@@ -1356,7 +1483,7 @@ def redigera_fordonsmodell(fm_id):
                         """, (b["id"], t, info["intervall"], 1 if info["aktiv"] else 0))
             return redirect(url_for("fordonsbibliotek"))
     return render_template("redigera_fordonsmodell.html", fm=fm, error=error,
-        intervaller=intervaller, nedraknare_typer=NEDRAKNARE_TYPER)
+        intervaller=intervaller, nedraknare_typer=get_nedraknare_typer(vid))
 
 @app.route("/fordonsbibliotek/<int:fm_id>/ta-bort", methods=["POST"])
 @login_required
@@ -1551,8 +1678,102 @@ def admin():
 
     paket_limits = get_paket_limits(verkstad_paket)
     error = request.args.get("error")
+
+    # Servicetyper: seeda standard till DB första gången så listan blir redigerbar
+    sakerstall_servicetyper_seedade(vid)
+    # Sortera så typer med km-intervall hamnar överst (stabilt, behåller inbördes ordning)
+    servicetyper = sorted(_hamta_servicetyper_rader(vid), key=lambda r: 0 if r["har_intervall"] else 1)
+
     return render_template("admin.html", anvandare=anvandare, verkstad_paket=verkstad_paket,
-                           paket_limits=paket_limits, error=error)
+                           paket_limits=paket_limits, error=error,
+                           servicetyper=servicetyper)
+
+@app.route("/admin/servicetyp/ny", methods=["POST"])
+@login_required
+def ny_servicetyp():
+    if current_user.roll != "admin":
+        return redirect(url_for("index"))
+    vid = current_user.verkstad_id
+    namn = request.form.get("namn", "").strip()
+    har_intervall = 1 if request.form.get("har_intervall") == "1" else 0
+    km_str = request.form.get("standard_km", "").strip()
+    standard_km = int(km_str) if km_str.isdigit() else None
+    if not har_intervall:
+        standard_km = None
+    if not namn:
+        return redirect(url_for("admin") + "#servicetyper")
+    sakerstall_servicetyper_seedade(vid)
+    with get_db() as conn:
+        if vid is not None:
+            finns = conn.execute(
+                "SELECT 1 FROM servicetyper WHERE verkstad_id=? AND kategori='service' AND namn=? COLLATE NOCASE",
+                (vid, namn)
+            ).fetchone()
+            maxord = conn.execute(
+                "SELECT COALESCE(MAX(ordning),-1) FROM servicetyper WHERE verkstad_id=? AND kategori='service'", (vid,)
+            ).fetchone()[0]
+        else:
+            finns = conn.execute(
+                "SELECT 1 FROM servicetyper WHERE verkstad_id IS NULL AND kategori='service' AND namn=? COLLATE NOCASE",
+                (namn,)
+            ).fetchone()
+            maxord = conn.execute(
+                "SELECT COALESCE(MAX(ordning),-1) FROM servicetyper WHERE verkstad_id IS NULL AND kategori='service'"
+            ).fetchone()[0]
+        if not finns:
+            conn.execute(
+                "INSERT INTO servicetyper (verkstad_id, kategori, namn, ordning, har_intervall, standard_km) VALUES (?,?,?,?,?,?)",
+                (vid, "service", namn, maxord + 1, har_intervall, standard_km)
+            )
+    return redirect(url_for("admin") + "#servicetyper")
+
+@app.route("/admin/servicetyp/standard-km/<int:st_id>", methods=["POST"])
+@login_required
+def standard_km_servicetyp(st_id):
+    if current_user.roll != "admin":
+        return redirect(url_for("index"))
+    vid = current_user.verkstad_id
+    km_str = request.form.get("km", "").strip()
+    standard_km = int(km_str) if km_str.isdigit() else None
+    with get_db() as conn:
+        rad = conn.execute("SELECT verkstad_id FROM servicetyper WHERE id=?", (st_id,)).fetchone()
+        if rad is None:
+            return redirect(url_for("admin") + "#servicetyper")
+        if vid is not None and rad["verkstad_id"] != vid:
+            abort(403)
+        conn.execute("UPDATE servicetyper SET standard_km=? WHERE id=?", (standard_km, st_id))
+    return redirect(url_for("admin") + "#servicetyper")
+
+@app.route("/admin/servicetyp/toggla-intervall/<int:st_id>", methods=["POST"])
+@login_required
+def toggla_intervall_servicetyp(st_id):
+    if current_user.roll != "admin":
+        return redirect(url_for("index"))
+    vid = current_user.verkstad_id
+    with get_db() as conn:
+        rad = conn.execute("SELECT verkstad_id, har_intervall FROM servicetyper WHERE id=?", (st_id,)).fetchone()
+        if rad is None:
+            return redirect(url_for("admin") + "#servicetyper")
+        if vid is not None and rad["verkstad_id"] != vid:
+            abort(403)
+        conn.execute("UPDATE servicetyper SET har_intervall=? WHERE id=?", (0 if rad["har_intervall"] else 1, st_id))
+    return redirect(url_for("admin") + "#servicetyper")
+
+@app.route("/admin/servicetyp/ta-bort/<int:st_id>", methods=["POST"])
+@login_required
+def ta_bort_servicetyp(st_id):
+    if current_user.roll != "admin":
+        return redirect(url_for("index"))
+    vid = current_user.verkstad_id
+    with get_db() as conn:
+        rad = conn.execute("SELECT verkstad_id FROM servicetyper WHERE id=?", (st_id,)).fetchone()
+        if rad is None:
+            return redirect(url_for("admin") + "#servicetyper")
+        # Tenant-skydd: bara egna verkstadens typer
+        if vid is not None and rad["verkstad_id"] != vid:
+            abort(403)
+        conn.execute("DELETE FROM servicetyper WHERE id=?", (st_id,))
+    return redirect(url_for("admin") + "#servicetyper")
 
 @app.route("/admin/ny", methods=["POST"])
 @login_required

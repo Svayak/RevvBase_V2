@@ -104,7 +104,8 @@
             <input type="checkbox" name="aktiv_{{ t }}" value="1" id="aktiv_{{ t }}" checked onchange="toggleIv('{{ t }}')">
             <span class="checkbox-label">{{ t }}</span>
           </label>
-          <input class="form-input intervall-input" type="number" name="iv_{{ t }}" id="iv_{{ t }}" placeholder="km">
+          <input class="form-input intervall-input" type="number" name="iv_{{ t }}" id="iv_{{ t }}" placeholder="km"
+                 {% if nedraknare_standard.get(t) %}value="{{ nedraknare_standard[t] }}"{% endif %}>
         </div>
         {% endfor %}
       </div>
