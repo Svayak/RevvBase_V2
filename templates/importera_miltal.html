@@ -1,35 +1,112 @@
 {% extends "base.html" %}
 {% block title %}Importera miltal – Revvbase{% endblock %}
 {% block content %}
-<div class="form-page" style="max-width: 560px">
+<div class="form-page" style="max-width: 640px">
   <a href="{{ url_for('index') }}" class="back-link">← Tillbaka</a>
   <h1 class="page-title">Importera miltal</h1>
 
+  {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+
+  {% if steg == "mappa" %}
+  <!-- Steg 2: koppla kolumner -->
+  <div class="form-card">
+    <p style="font-size:0.9rem; color:var(--text-muted); margin-bottom:1rem;">
+      Vi läste in filen. Tala om vilken kolumn som är vad, så vet RevvBase hur den ska tolkas.
+    </p>
+
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="steg" value="importera">
+      <textarea name="csv_data" hidden>{{ csv_data }}</textarea>
+      <input type="hidden" name="delim" value="{{ delim }}">
+
+      <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.88rem; margin-bottom:1rem; cursor:pointer;">
+        <input type="checkbox" name="har_rubrik" value="1" {% if har_rubrik %}checked{% endif %}
+               onchange="this.form.steg.value='mappa'; this.form.submit();">
+        Första raden är en rubrikrad
+      </label>
+
+      <div class="form-group">
+        <label class="form-label">Reg.nr-kolumn <span style="color:var(--accent)">*</span></label>
+        <select class="form-input" name="col_regnr" required>
+          <option value="">– välj kolumn –</option>
+          {% for i, etikett in kolumner %}<option value="{{ i }}" {% if i == gissa_regnr %}selected{% endif %}>{{ etikett }}</option>{% endfor %}
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Km-kolumn <span style="color:var(--accent)">*</span></label>
+        <select class="form-input" name="col_km" required>
+          <option value="">– välj kolumn –</option>
+          {% for i, etikett in kolumner %}<option value="{{ i }}" {% if i == gissa_km %}selected{% endif %}>{{ etikett }}</option>{% endfor %}
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Datum-kolumn (valfritt)</label>
+        <select class="form-input" name="col_datum">
+          <option value="">Använd dagens datum</option>
+          {% for i, etikett in kolumner %}<option value="{{ i }}" {% if i == gissa_datum %}selected{% endif %}>{{ etikett }}</option>{% endfor %}
+        </select>
+      </div>
+
+      {% if preview %}
+      <div style="margin:1.25rem 0;">
+        <div style="font-size:0.8rem; color:var(--text-muted); margin-bottom:0.4rem;">Förhandsvisning ({{ "utan rubrikrad" if not har_rubrik else "första dataraderna" }}):</div>
+        <div style="overflow-x:auto; border:1px solid var(--border); border-radius:var(--radius);">
+          <table style="width:100%; border-collapse:collapse; font-size:0.82rem;">
+            <thead><tr>
+              {% for i, etikett in kolumner %}<th style="text-align:left; padding:0.4rem 0.6rem; background:var(--bg3); border-bottom:1px solid var(--border); white-space:nowrap;">{{ etikett }}</th>{% endfor %}
+            </tr></thead>
+            <tbody>
+              {% for rad in preview %}
+              <tr>{% for cell in rad %}<td style="padding:0.35rem 0.6rem; border-bottom:1px solid var(--border); white-space:nowrap;">{{ cell }}</td>{% endfor %}</tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {% endif %}
+
+      <div style="display:flex; gap:0.75rem;">
+        <a href="{{ url_for('importera_miltal') }}" class="btn btn-ghost">Avbryt</a>
+        <button type="submit" class="btn btn-primary" style="flex:1;">Importera</button>
+      </div>
+    </form>
+  </div>
+
+  {% elif steg == "klar" %}
+  <!-- Steg 3: resultat -->
+  <div class="form-card">
+    <p style="font-size:0.9rem; color:var(--text-muted); margin:0;">Importen är klar. <a href="{{ url_for('importera_miltal') }}" style="color:var(--accent);">Importera en till fil</a></p>
+  </div>
+
+  {% else %}
+  <!-- Steg 1: ladda upp -->
   <div class="form-card">
     <p style="font-size:0.9rem; color:var(--text-muted); margin-bottom:0.5rem;">
-      Ladda upp en CSV-fil med kolumnerna <code>regnr</code> och <code>km</code>.<br>
-      Varje rad registreras som en miltal-post med dagens datum. Mellanslag i reg.nr spelar ingen roll.
+      Ladda upp en CSV-fil med miltal. I nästa steg kopplar du filens kolumner till reg.nr och km,
+      så spelar det ingen roll vad kolumnerna heter eller om filen använder komma eller semikolon.
     </p>
 
     <div class="csv-example">
       <div class="csv-example__title">Exempel på CSV-format:</div>
       <pre>regnr,km
 ABC123,85000
-XYZ456,142500
-DEF789,67300</pre>
+XYZ456,142500</pre>
     </div>
 
-    {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
-
     <form method="post" enctype="multipart/form-data">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="steg" value="upload">
       <div class="form-group">
         <label class="form-label">Välj CSV-fil</label>
         <input class="form-input" type="file" name="csv_fil" accept=".csv" required>
       </div>
-      <button type="submit" class="btn btn-primary btn-full">Importera</button>
+      <button type="submit" class="btn btn-primary btn-full">Fortsätt</button>
     </form>
   </div>
+  {% endif %}
 
   {% if resultat %}
   <div style="margin-top:1.5rem;">

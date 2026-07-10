@@ -1499,54 +1499,172 @@ def ta_bort_fordonsmodell(fm_id):
             conn.execute("DELETE FROM fordonsmodeller WHERE id=?", (fm_id,))
     return redirect(url_for("fordonsbibliotek"))
 
+def _ser_ut_som_tal(cell):
+    """True om cellen ser ut som ett tal (ev. med mellanslag/komma/punkt)."""
+    rensad = (cell or "").strip().replace(" ", "").replace(" ", "").replace(",", "").replace(".", "")
+    return rensad.isdigit() and rensad != ""
+
+def _parse_km(raw):
+    """Tolkar km robust: mellanslag = tusental, komma/punkt = decimal (decimaldelen kapas).
+    Returnerar int eller None."""
+    s = "".join(c for c in (raw or "") if c.isdigit() or c in ",.")
+    if not s:
+        return None
+    dec = max(s.rfind(","), s.rfind("."))  # sista , eller . = decimaltecken
+    intdel = s[:dec] if dec != -1 else s
+    siffror = "".join(c for c in intdel if c.isdigit())
+    return int(siffror) if siffror else None
+
+def _hitta_delim(text):
+    """Väljer avgränsare deterministiskt. Prioriterar ; och tab framför , (decimalkomma är vanligt)."""
+    rader = [l for l in text.splitlines() if l.strip()][:10]
+    if not rader:
+        return ","
+    for d in [";", "\t", "|", ","]:
+        antal = [len(l.split(d)) for l in rader]
+        # Konsekvent samma antal kolumner > 1 på alla rader → rätt avgränsare
+        if antal[0] > 1 and len(set(antal)) == 1:
+            return d
+    # Fallback: den som förekommer mest
+    return max([";", "\t", "|", ","], key=lambda d: text.count(d))
+
+def _decoda_csv(data_bytes):
+    """Avkodar CSV robust (UTF-8/Windows/Latin-1) och gissar avgränsare."""
+    text = None
+    for enc in ("utf-8-sig", "cp1252", "latin-1"):
+        try:
+            text = data_bytes.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        text = data_bytes.decode("utf-8", errors="replace")
+    return text, _hitta_delim(text)
+
+def _csv_rader(text, delim):
+    return [r for r in csv.reader(text.splitlines(), delimiter=delim) if any((c or "").strip() for c in r)]
+
+def _bygg_kolumner(text, delim, har_rubrik):
+    """Returnerar (kolumner, preview) där kolumner = [(index, etikett), ...]."""
+    rader = _csv_rader(text, delim)
+    if not rader:
+        return [], []
+    forsta = rader[0]
+    if har_rubrik:
+        kolumner = [(i, (forsta[i] or f"Kolumn {i+1}").strip()) for i in range(len(forsta))]
+        preview = rader[1:6]
+    else:
+        kolumner = [(i, f"Kolumn {i+1}  (t.ex. {forsta[i].strip()})") for i in range(len(forsta))]
+        preview = rader[0:5]
+    return kolumner, preview
+
+def _gissa_index(kolumner, kandidater):
+    for i, etikett in kolumner:
+        if etikett.lower().strip() in kandidater:
+            return i
+    return ""
+
 @app.route("/importera-miltal", methods=["GET","POST"])
 @login_required
 def importera_miltal():
-    resultat = []
     vid = current_user.verkstad_id
-    if request.method == "POST":
+    if request.method != "POST":
+        return render_template("importera_miltal.html", steg="upload")
+
+    steg = request.form.get("steg", "upload")
+
+    # ── Steg 1: ladda upp fil, visa kolumnmappning ──
+    if steg == "upload":
         fil = request.files.get("csv_fil")
-        if not fil or not fil.filename.endswith(".csv"):
-            return render_template("importera_miltal.html", error="Välj en giltig CSV-fil.", resultat=[])
+        if not fil or not fil.filename.lower().endswith(".csv"):
+            return render_template("importera_miltal.html", steg="upload", error="Välj en giltig CSV-fil.")
+        try:
+            text, delim = _decoda_csv(fil.read())
+            rader = _csv_rader(text, delim)
+        except Exception as e:
+            return render_template("importera_miltal.html", steg="upload", error=f"Kunde inte läsa filen: {e}")
+        if not rader:
+            return render_template("importera_miltal.html", steg="upload", error="Filen verkar tom.")
+        # Gissa om första raden är rubrik: om någon cell ser ut som ett tal är det troligen data
+        har_rubrik = not any(_ser_ut_som_tal(c) for c in rader[0])
+        kolumner, preview = _bygg_kolumner(text, delim, har_rubrik)
+        return render_template("importera_miltal.html", steg="mappa",
+            kolumner=kolumner, preview=preview, csv_data=text, delim=delim, har_rubrik=har_rubrik,
+            gissa_regnr=_gissa_index(kolumner, {"regnr","reg.nr","reg nr","registreringsnummer","reg","nummerplåt"}) if har_rubrik else 0,
+            gissa_km=_gissa_index(kolumner, {"km","miltal","kilometer","mätarställning","matarstallning","mileage","odometer"}) if har_rubrik else 1,
+            gissa_datum=_gissa_index(kolumner, {"datum","date","dat"}) if har_rubrik else "")
 
-        innehall = fil.read().decode("utf-8-sig").splitlines()
-        reader = csv.DictReader(innehall)
-        for rad in reader:
-            nycklar = {k.lower().strip(): v for k, v in rad.items()}
-            regnr_raw = (nycklar.get("regnr") or nycklar.get("reg.nr") or nycklar.get("reg nr") or "").strip().upper()
-            regnr = regnr_raw.replace(" ", "")
-            km_str = (nycklar.get("km") or nycklar.get("miltal") or nycklar.get("kilometer") or "").strip()
+    # ── Bygg om mappningen (t.ex. när rubrik-kryssrutan ändras) ──
+    if steg == "mappa":
+        csv_data = request.form.get("csv_data", "")
+        delim = request.form.get("delim", ",") or ","
+        har_rubrik = request.form.get("har_rubrik") == "1"
+        kolumner, preview = _bygg_kolumner(csv_data, delim, har_rubrik)
+        return render_template("importera_miltal.html", steg="mappa",
+            kolumner=kolumner, preview=preview, csv_data=csv_data, delim=delim, har_rubrik=har_rubrik,
+            gissa_regnr=_gissa_index(kolumner, {"regnr","reg.nr","reg nr","registreringsnummer","reg","nummerplåt"}) if har_rubrik else 0,
+            gissa_km=_gissa_index(kolumner, {"km","miltal","kilometer","mätarställning","matarstallning","mileage","odometer"}) if har_rubrik else 1,
+            gissa_datum=_gissa_index(kolumner, {"datum","date","dat"}) if har_rubrik else "")
 
-            if not regnr or not km_str:
-                resultat.append({"regnr": regnr or "?", "status": "fel", "msg": "Saknar regnr eller km"})
-                continue
-            if not km_str.isdigit():
-                resultat.append({"regnr": regnr, "status": "fel", "msg": f"Ogiltigt km-värde: {km_str}"})
-                continue
+    # ── Steg 2: importera enligt vald mappning ──
+    csv_data = request.form.get("csv_data", "")
+    delim = request.form.get("delim", ",") or ","
+    har_rubrik = request.form.get("har_rubrik") == "1"
 
-            km = int(km_str)
-            with get_db() as conn:
-                if vid is not None:
-                    bil = conn.execute(
-                        "SELECT * FROM bilar WHERE REPLACE(regnr,' ','')=? AND verkstad_id=?", (regnr, vid)
-                    ).fetchone()
-                else:
-                    bil = conn.execute(
-                        "SELECT * FROM bilar WHERE REPLACE(regnr,' ','')=?", (regnr,)
-                    ).fetchone()
+    def _idx(namn):
+        v = request.form.get(namn, "")
+        return int(v) if v.isdigit() else None
+    i_regnr, i_km, i_datum = _idx("col_regnr"), _idx("col_km"), _idx("col_datum")
 
-            if not bil:
-                resultat.append({"regnr": regnr, "status": "fel", "msg": "Bilen finns inte i systemet"})
-                continue
+    if i_regnr is None or i_km is None or i_regnr == i_km:
+        kolumner, preview = _bygg_kolumner(csv_data, delim, har_rubrik)
+        return render_template("importera_miltal.html", steg="mappa",
+            kolumner=kolumner, preview=preview, csv_data=csv_data, delim=delim, har_rubrik=har_rubrik,
+            gissa_regnr=i_regnr if i_regnr is not None else "", gissa_km=i_km if i_km is not None else "",
+            gissa_datum=i_datum if i_datum is not None else "",
+            error="Välj vilken kolumn som är reg.nr respektive km (måste vara olika kolumner).")
 
-            with get_db() as conn:
-                conn.execute(
-                    "INSERT INTO handelser (bil_id, datum, km, typ, service_typer, beskrivning, skapad_av) VALUES (?,?,?,?,?,?,?)",
-                    (bil["id"], str(date.today()), km, "miltal", None, None, current_user.namn)
-                )
-            resultat.append({"regnr": regnr, "status": "ok", "msg": f"Registrerad: {km} km"})
+    rader = _csv_rader(csv_data, delim)
+    if har_rubrik:
+        rader = rader[1:]
 
-    return render_template("importera_miltal.html", error=None, resultat=resultat)
+    resultat = []
+    for rad in rader:
+        def cell(i):
+            return rad[i].strip() if (i is not None and i < len(rad)) else ""
+        regnr = cell(i_regnr).upper().replace(" ", "")
+        km = _parse_km(cell(i_km))
+        datum_val = str(date.today())
+        if i_datum is not None:
+            dv = cell(i_datum)
+            if dv:
+                datum_val = dv
+
+        if not regnr or km is None:
+            resultat.append({"regnr": regnr or "?", "status": "fel", "msg": "Saknar regnr eller km"})
+            continue
+
+        with get_db() as conn:
+            if vid is not None:
+                bil = conn.execute(
+                    "SELECT * FROM bilar WHERE REPLACE(regnr,' ','')=? AND verkstad_id=?", (regnr, vid)
+                ).fetchone()
+            else:
+                bil = conn.execute(
+                    "SELECT * FROM bilar WHERE REPLACE(regnr,' ','')=?", (regnr,)
+                ).fetchone()
+        if not bil:
+            resultat.append({"regnr": regnr, "status": "fel", "msg": "Bilen finns inte i systemet"})
+            continue
+
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO handelser (bil_id, datum, km, typ, service_typer, beskrivning, skapad_av) VALUES (?,?,?,?,?,?,?)",
+                (bil["id"], datum_val, km, "miltal", None, None, current_user.namn)
+            )
+        resultat.append({"regnr": regnr, "status": "ok", "msg": f"Registrerad: {km} km"})
+
+    return render_template("importera_miltal.html", steg="klar", resultat=resultat)
 
 @app.route("/exportera")
 @login_required
