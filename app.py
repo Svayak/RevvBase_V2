@@ -2210,6 +2210,12 @@ def superadmin_logout():
     session.pop("superadmin", None)
     return redirect(url_for("superadmin_login"))
 
+# ── Altitud Media CRM: admin-API ────────────────────────────────────────────
+# Ger Altitud Media CRM ett nyckelskyddat API för att hantera verkstäder live.
+# Kräver miljövariabeln ADMIN_API_KEY (samma värde som i CRM:ets platforms.json).
+from altitud_admin_api import admin_api
+app.register_blueprint(admin_api)
+
 # ── START ─────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
