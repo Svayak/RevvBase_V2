@@ -3,3 +3,4 @@ verkstad.db
 säkerhetskopior/
 __pycache__/
 *.pyc
+.claude/
