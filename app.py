@@ -167,6 +167,21 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
+def hamta_senaste_kommentarer(bilar):
+    """Senaste noteringen (kommentar) per bil, för visning på bilkortet."""
+    senaste = {}
+    bil_ids = [b["id"] for b in bilar]
+    if bil_ids:
+        placeholders = ",".join("?" * len(bil_ids))
+        with get_db() as conn:
+            rader = conn.execute(
+                f"SELECT bil_id, text FROM kommentarer WHERE bil_id IN ({placeholders}) ORDER BY id ASC",
+                bil_ids
+            ).fetchall()
+        for r in rader:
+            senaste[r["bil_id"]] = r["text"]  # id ASC → sista = nyaste
+    return senaste
+
 # ── PAKETBEGRÄNSNINGAR (läser från DB, ej hårdkodade) ────────────────────────
 def get_paket_limits(paket):
     """Hämtar paketgränser från paketinstallningar-tabellen.
@@ -674,7 +689,8 @@ def slug_dashboard(slug):
                 bilar = conn.execute(
                     "SELECT * FROM bilar ORDER BY fordonsnummer, regnr"
                 ).fetchall()
-    return render_template("index.html", bilar=bilar, q=q)
+    return render_template("index.html", bilar=bilar, q=q,
+        senaste_kommentar=hamta_senaste_kommentarer(bilar))
 
 @app.route("/dashboard")
 @login_required
@@ -707,7 +723,8 @@ def index():
                 bilar = conn.execute(
                     "SELECT * FROM bilar ORDER BY fordonsnummer, regnr"
                 ).fetchall()
-    return render_template("index.html", bilar=bilar, q=q)
+    return render_template("index.html", bilar=bilar, q=q,
+        senaste_kommentar=hamta_senaste_kommentarer(bilar))
 
 @app.route("/bil/ny", methods=["GET","POST"])
 @login_required
@@ -1003,9 +1020,14 @@ def ta_bort_bil(bil_id):
 def print_bil(bil_id):
     b = check_bil_access(bil_id)
     with get_db() as conn:
-        handelser = conn.execute(
-            "SELECT * FROM handelser WHERE bil_id=? ORDER BY km DESC", (bil_id,)
+        rader = conn.execute(
+            "SELECT * FROM handelser WHERE bil_id=? AND typ='service' ORDER BY km DESC", (bil_id,)
         ).fetchall()
+    handelser = []
+    for h in rader:
+        d = dict(h)
+        d["service_typer_lista"] = json.loads(h["service_typer"]) if h["service_typer"] else []
+        handelser.append(d)
     return render_template("print_bil.html", bil=b, handelser=handelser, today=str(date.today()))
 
 @app.route("/kommande")
@@ -1865,4 +1887,6 @@ if __name__ == "__main__":
         print("Skapade standardanvändare: admin / verkstad123")
     t = threading.Thread(target=daglig_backup, daemon=True)
     t.start()
-    app.run(host="0.0.0.0", port=5001, debug=False)
+    port = int(os.environ.get("PORT", 5001))
+    debug = os.environ.get("FLASK_DEBUG") == "1"
+    app.run(host="0.0.0.0", port=port, debug=debug)

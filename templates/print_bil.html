@@ -37,22 +37,13 @@
       </tr>
     </thead>
     <tbody>
-      {% for h in handelser if h.typ != "miltal" %}
+      {% for h in handelser %}
       <tr>
         <td>{{ h.datum }}</td>
         <td>{{ h.km }}</td>
-        <td><span class="badge badge-{{ h.typ }}">{{ "SERVICE" if h.typ == "service" else "FEL" }}</span></td>
+        <td><span class="badge badge-service">SERVICE</span></td>
         <td>
-          {% if h.service_typer %}
-          <span id="st-{{ h.id }}"></span>
-          <script>
-            (function(){
-              var raw = {{ h.service_typer | tojson }};
-              document.getElementById('st-{{ h.id }}').textContent = raw.join(', ');
-            })();
-          </script>
-          {% endif %}
-          {% if h.beskrivning %}{% if h.service_typer %}<br>{% endif %}{{ h.beskrivning }}{% endif %}
+          {% if h.service_typer_lista %}{{ h.service_typer_lista | join(', ') }}{% endif %}
         </td>
       </tr>
       {% endfor %}

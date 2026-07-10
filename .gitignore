@@ -4,3 +4,8 @@ säkerhetskopior/
 __pycache__/
 *.pyc
 .claude/
+
+# Lokal utveckling
+.env
+venv/
+.backups/

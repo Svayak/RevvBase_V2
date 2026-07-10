@@ -22,6 +22,7 @@
       {% if b.arsmodell %}<span class="car-card__ar">{{ b.arsmodell }}</span>{% endif %}
     </div>
     {% if b.notering %}<div class="car-card__notering">{{ b.notering }}</div>{% endif %}
+    {% if senaste_kommentar.get(b.id) %}<div class="car-card__kommentar">🗒 {{ senaste_kommentar[b.id] }}</div>{% endif %}
     <div class="car-card__arrow">→</div>
   </a>
   {% endfor %}
