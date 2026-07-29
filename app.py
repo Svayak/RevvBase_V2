@@ -227,7 +227,8 @@ def hamta_senaste_kommentarer(bilar):
         placeholders = ",".join("?" * len(bil_ids))
         with get_db() as conn:
             rader = conn.execute(
-                f"SELECT bil_id, text FROM kommentarer WHERE bil_id IN ({placeholders}) ORDER BY id ASC",
+                f"SELECT bil_id, text FROM kommentarer WHERE bil_id IN ({placeholders}) "
+                f"AND (avklarad_datum IS NULL OR avklarad_datum='') ORDER BY id ASC",
                 bil_ids
             ).fetchall()
         for r in rader:
