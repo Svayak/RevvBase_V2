@@ -821,6 +821,50 @@ code { background: var(--bg3); padding: 0.1rem 0.4rem; border-radius: 3px; font-
 }
 .kommentar-delete-btn:hover { color: #e05050; background: #2b0d0d; }
 
+.kommentar-avklara-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.72rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  margin-left: auto;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+.kommentar-avklara-btn:hover { color: #3fbf6f; border-color: #2f7d4f; background: #0d2b18; }
+
+.kommentar-aterstall-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.72rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  margin-left: auto;
+  transition: color 0.15s, background 0.15s;
+}
+.kommentar-aterstall-btn:hover { color: var(--accent); background: var(--bg3); }
+
+.kommentar-historik { margin-top: 1.25rem; }
+.kommentar-historik__titel {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin: 0 0 0.5rem;
+}
+.kommentar-kort--avklarad {
+  border-left-color: #2f7d4f;
+  opacity: 0.85;
+}
+.kommentar-kort--avklarad .kommentar-kort__text {
+  text-decoration: line-through;
+  text-decoration-color: var(--text-muted);
+}
+.kommentar-avklarad-datum { color: #3fbf6f; }
+
 /* ── MOBILANPASSNING ────────────────────────────────────────────────────── */
 .hamburger { display:none; background:none; border:none; cursor:pointer; padding:0.4rem; color:var(--text-muted); }
 .mobile-menu {

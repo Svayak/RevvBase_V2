@@ -37,7 +37,7 @@
       {% set status = "unknown" %}
     {% elif diff >= iv %}
       {% set status = "warn" %}
-    {% elif diff >= iv * 0.8 %}
+    {% elif diff >= iv - arbetsorder_marginal %}
       {% set status = "caution" %}
     {% else %}
       {% set status = "ok" %}
@@ -70,6 +70,11 @@
       <div class="kommentar-kort__meta">
         {% if k.skapad_av %}<span>{{ k.skapad_av }}</span> · {% endif %}
         <span>{{ k.datum }}</span>
+        <form method="post" action="{{ url_for('avklara_kommentar', bil_id=bil.id, k_id=k.id) }}"
+              style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="kommentar-avklara-btn" title="Markera som avklarad">✓ Avklara</button>
+        </form>
         <form method="post" action="{{ url_for('ta_bort_kommentar', bil_id=bil.id, k_id=k.id) }}"
               style="display:inline;" onsubmit="return confirm('Ta bort denna notering?')">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -78,6 +83,33 @@
       </div>
     </div>
     {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if avklarade_kommentarer %}
+  <div class="kommentar-historik">
+    <h3 class="kommentar-historik__titel">Avklarade noteringar</h3>
+    <div class="kommentar-lista">
+      {% for k in avklarade_kommentarer %}
+      <div class="kommentar-kort kommentar-kort--avklarad">
+        <div class="kommentar-kort__text">{{ k.text }}</div>
+        <div class="kommentar-kort__meta">
+          {% if k.skapad_av %}<span>{{ k.skapad_av }}</span> · {% endif %}
+          <span class="kommentar-avklarad-datum">Avklarad {{ k.avklarad_datum }}</span>
+          <form method="post" action="{{ url_for('aterstall_kommentar', bil_id=bil.id, k_id=k.id) }}"
+                style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="kommentar-aterstall-btn" title="Återställ till aktiv">↩ Återställ</button>
+          </form>
+          <form method="post" action="{{ url_for('ta_bort_kommentar', bil_id=bil.id, k_id=k.id) }}"
+                style="display:inline;" onsubmit="return confirm('Ta bort denna notering?')">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="kommentar-delete-btn" title="Ta bort">✕</button>
+          </form>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
   </div>
   {% endif %}
 </section>

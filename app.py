@@ -398,6 +398,14 @@ def init_db():
         try:
             conn.execute("ALTER TABLE fordonsmodeller ADD COLUMN verkstad_id INTEGER")
         except: pass
+        # Notering avklarad: datum då noteringen markerades som klar (NULL = aktiv)
+        try:
+            conn.execute("ALTER TABLE kommentarer ADD COLUMN avklarad_datum TEXT")
+        except: pass
+        # Marginal (km) innan intervall då arbetsorder/varning triggas (NULL = standard 5000)
+        try:
+            conn.execute("ALTER TABLE verkstader ADD COLUMN arbetsorder_marginal_km INTEGER")
+        except: pass
         # Skapa paketinstallningar om den saknas
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS paketinstallningar (
@@ -533,6 +541,24 @@ def spara_intervall(bil_id, intervall_dict, verkstad_id=None):
                 VALUES (?,?,?,?)
                 ON CONFLICT(bil_id, service_typ) DO UPDATE SET intervall_km=excluded.intervall_km, aktiv=excluded.aktiv
             """, (bil_id, typ, info.get("intervall"), 1 if info.get("aktiv") else 0))
+
+ARBETSORDER_MARGINAL_STANDARD = 5000
+
+def get_arbetsorder_marginal(verkstad_id):
+    """Km-marginal innan ett intervall är uppnått då arbetsorder/varning ska triggas.
+    Konfigureras per verkstad i Admin. Saknas värde → standard 5000 km."""
+    if verkstad_id is None:
+        return ARBETSORDER_MARGINAL_STANDARD
+    try:
+        with get_db() as conn:
+            r = conn.execute(
+                "SELECT arbetsorder_marginal_km FROM verkstader WHERE id=?", (verkstad_id,)
+            ).fetchone()
+        if r is not None and r["arbetsorder_marginal_km"] is not None:
+            return int(r["arbetsorder_marginal_km"])
+    except Exception:
+        pass
+    return ARBETSORDER_MARGINAL_STANDARD
 
 def bygg_panel(bil_id, marke, modell, handelser, senaste_km, arsmodell=None, verkstad_id=None):
     intervaller = get_intervall(bil_id, marke, modell, arsmodell, verkstad_id)
@@ -946,7 +972,12 @@ def bil(bil_id):
             "SELECT * FROM handelser WHERE bil_id=? ORDER BY km DESC", (bil_id,)
         ).fetchall()
         kommentarer = conn.execute(
-            "SELECT * FROM kommentarer WHERE bil_id=? ORDER BY id DESC", (bil_id,)
+            "SELECT * FROM kommentarer WHERE bil_id=? AND (avklarad_datum IS NULL OR avklarad_datum='') ORDER BY id DESC",
+            (bil_id,)
+        ).fetchall()
+        avklarade_kommentarer = conn.execute(
+            "SELECT * FROM kommentarer WHERE bil_id=? AND avklarad_datum IS NOT NULL AND avklarad_datum<>'' ORDER BY avklarad_datum DESC, id DESC",
+            (bil_id,)
         ).fetchall()
 
     senaste_km = alla_handelser[0]["km"] if alla_handelser else None
@@ -954,7 +985,8 @@ def bil(bil_id):
     return render_template("bil.html", bil=b, handelser=handelser,
         panel=panel, senaste_km=senaste_km,
         service_typer=get_service_typer(b["verkstad_id"]), filter_typ=filter_typ,
-        kommentarer=kommentarer)
+        kommentarer=kommentarer, avklarade_kommentarer=avklarade_kommentarer,
+        arbetsorder_marginal=get_arbetsorder_marginal(b["verkstad_id"]))
 
 @app.route("/bil/<int:bil_id>/redigera", methods=["GET","POST"])
 @login_required
@@ -1106,6 +1138,28 @@ def ta_bort_kommentar(bil_id, k_id):
         conn.execute("DELETE FROM kommentarer WHERE id=? AND bil_id=?", (k_id, bil_id))
     return redirect(url_for("bil", bil_id=bil_id))
 
+@app.route("/bil/<int:bil_id>/avklara-kommentar/<int:k_id>", methods=["POST"])
+@login_required
+def avklara_kommentar(bil_id, k_id):
+    check_bil_access(bil_id)
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE kommentarer SET avklarad_datum=? WHERE id=? AND bil_id=?",
+            (str(date.today()), k_id, bil_id)
+        )
+    return redirect(url_for("bil", bil_id=bil_id))
+
+@app.route("/bil/<int:bil_id>/aterstall-kommentar/<int:k_id>", methods=["POST"])
+@login_required
+def aterstall_kommentar(bil_id, k_id):
+    check_bil_access(bil_id)
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE kommentarer SET avklarad_datum=NULL WHERE id=? AND bil_id=?",
+            (k_id, bil_id)
+        )
+    return redirect(url_for("bil", bil_id=bil_id))
+
 @app.route("/bil/<int:bil_id>/ta-bort-handelse/<int:h_id>", methods=["POST"])
 @login_required
 def ta_bort_handelse(bil_id, h_id):
@@ -1173,6 +1227,7 @@ def kommande():
         si_map[si["bil_id"]].append(si)
     fm_cache = {}
     nedr_cache = {}
+    marg_cache = {}
 
     bilar_service = []
     for b in bilar:
@@ -1190,6 +1245,9 @@ def kommande():
         if b["verkstad_id"] not in nedr_cache:
             nedr_cache[b["verkstad_id"]] = get_nedraknare_typer(b["verkstad_id"])
         nedraknare = nedr_cache[b["verkstad_id"]]
+        if b["verkstad_id"] not in marg_cache:
+            marg_cache[b["verkstad_id"]] = get_arbetsorder_marginal(b["verkstad_id"])
+        marginal = marg_cache[b["verkstad_id"]]
         si_rader = si_map[b["id"]]
         db_map_si = {r["service_typ"]: r for r in si_rader}
         intervaller = {}
@@ -1223,7 +1281,7 @@ def kommande():
                 continue
             if diff >= iv:
                 atgarder.append({"typ": typ, "diff": diff, "intervall": iv, "status": "warn"})
-            elif diff >= iv * 0.8:
+            elif diff >= iv - marginal:
                 atgarder.append({"typ": typ, "diff": diff, "intervall": iv, "status": "caution"})
         if atgarder:
             atgarder.sort(key=lambda a: (0 if a["diff"] >= a["intervall"] else 1, -(a["diff"] or 0)))
@@ -1278,6 +1336,7 @@ def arbetsorder():
         si_map[si["bil_id"]].append(si)
     fm_cache = {}
     nedr_cache = {}
+    marg_cache = {}
 
     bilar_data = []
     for b in bilar:
@@ -1294,6 +1353,9 @@ def arbetsorder():
         if b["verkstad_id"] not in nedr_cache:
             nedr_cache[b["verkstad_id"]] = get_nedraknare_typer(b["verkstad_id"])
         nedraknare = nedr_cache[b["verkstad_id"]]
+        if b["verkstad_id"] not in marg_cache:
+            marg_cache[b["verkstad_id"]] = get_arbetsorder_marginal(b["verkstad_id"])
+        marginal = marg_cache[b["verkstad_id"]]
         si_rader = si_map[b["id"]]
         db_map_si = {r["service_typ"]: r for r in si_rader}
         intervaller = {}
@@ -1326,7 +1388,7 @@ def arbetsorder():
                 continue
             if diff >= iv:
                 status = "warn"
-            elif diff >= iv * 0.8:
+            elif diff >= iv - marginal:
                 status = "caution"
             else:
                 continue
@@ -1804,7 +1866,23 @@ def admin():
 
     return render_template("admin.html", anvandare=anvandare, verkstad_paket=verkstad_paket,
                            paket_limits=paket_limits, error=error,
-                           servicetyper=servicetyper)
+                           servicetyper=servicetyper,
+                           arbetsorder_marginal=get_arbetsorder_marginal(vid))
+
+@app.route("/admin/arbetsorder-marginal", methods=["POST"])
+@login_required
+def spara_arbetsorder_marginal():
+    if current_user.roll != "admin":
+        return redirect(url_for("index"))
+    vid = current_user.verkstad_id
+    km_str = request.form.get("marginal_km", "").strip()
+    marginal = int(km_str) if km_str.isdigit() else ARBETSORDER_MARGINAL_STANDARD
+    if marginal < 0:
+        marginal = ARBETSORDER_MARGINAL_STANDARD
+    if vid is not None:
+        with get_db() as conn:
+            conn.execute("UPDATE verkstader SET arbetsorder_marginal_km=? WHERE id=?", (marginal, vid))
+    return redirect(url_for("admin") + "#arbetsorder")
 
 @app.route("/admin/servicetyp/ny", methods=["POST"])
 @login_required

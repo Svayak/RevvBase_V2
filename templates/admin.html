@@ -192,6 +192,30 @@
   </div>
 </div>
 
+<!-- Arbetsorder -->
+<div id="arbetsorder" style="max-width:560px; margin-top:2.5rem;">
+  <h3 class="section-title">Arbetsorder</h3>
+  <p style="font-size:0.85rem; color:var(--text-muted); line-height:1.6; margin:0.4rem 0 1.25rem;">
+    Hur långt <strong>innan</strong> ett km-intervall är uppnått ska en åtgärd flaggas och tas med i
+    kommande arbetsorder? Sätts i kilometer. Exempel: kamremsbyte vid 160&nbsp;000 km med marginal
+    5&nbsp;000 km → åtgärden flaggas vid 155&nbsp;000 km. Lämnas fältet tomt används standard 5&nbsp;000 km.
+  </p>
+
+  <div class="form-card">
+    <form method="post" action="{{ url_for('spara_arbetsorder_marginal') }}"
+          style="display:flex; gap:0.75rem; align-items:flex-end; flex-wrap:wrap;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-group" style="margin:0;">
+        <label class="form-label">Skapa arbetsorder (km innan intervall)</label>
+        <input class="form-input" type="number" name="marginal_km" min="0" step="500"
+               value="{{ arbetsorder_marginal }}" placeholder="5000"
+               style="width:160px;">
+      </div>
+      <button type="submit" class="btn btn-primary">Spara</button>
+    </form>
+  </div>
+</div>
+
 <script>
 // Spara i bakgrunden så sidan inte laddas om/scrollar
 function _spara(form, onFail){
