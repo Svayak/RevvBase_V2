@@ -710,6 +710,41 @@ def valkomstmail_html(namn, slug, email, password, paket):
 </body>
 </html>"""
 
+def skriv_verkstad_csv(verkstad_id, fil):
+    """Skriver en verkstads bilar + händelser till en CSV-fil.
+    Delad av daglig_backup, manuell superadmin-backup och raderingsskyddet."""
+    # Explicit ORDER BY: utan den bestäms radordningen av frågeplanen, som
+    # ändras när index läggs till. Backuperna ska vara jämförbara mellan körningar.
+    with get_db() as conn:
+        bilar = conn.execute(
+            "SELECT id, regnr, fordonsnummer, marke, modell, arsmodell, notering "
+            "FROM bilar WHERE verkstad_id = ? ORDER BY id",
+            (verkstad_id,)
+        ).fetchall()
+        handelser = conn.execute("""
+            SELECT h.*, b.regnr, b.fordonsnummer, b.marke, b.modell
+            FROM handelser h
+            JOIN bilar b ON h.bil_id = b.id
+            WHERE b.verkstad_id = ?
+            ORDER BY h.id
+        """, (verkstad_id,)).fetchall()
+    os.makedirs(os.path.dirname(fil), exist_ok=True)
+    with open(fil, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["## BILAR"])
+        writer.writerow(["id","regnr","fordonsnummer","marke","modell","arsmodell","notering"])
+        for b in bilar:
+            writer.writerow([b["id"], b["regnr"], b["fordonsnummer"],
+                             b["marke"], b["modell"], b["arsmodell"], b["notering"]])
+        writer.writerow([])
+        writer.writerow(["## HÄNDELSER"])
+        writer.writerow(["id","bil_id","regnr","fordonsnummer","marke","modell","datum","km","typ","service_typer","beskrivning"])
+        for h in handelser:
+            writer.writerow([h["id"], h["bil_id"], h["regnr"], h["fordonsnummer"],
+                             h["marke"], h["modell"], h["datum"], h["km"], h["typ"],
+                             h["service_typer"], h["beskrivning"]])
+    return len(bilar), len(handelser)
+
 def daglig_backup():
     while True:
         nu = datetime.now()
@@ -725,36 +760,7 @@ def daglig_backup():
                 fil = os.path.join(mapp, f"{idag}.csv")
                 if not os.path.exists(fil):
                     try:
-                        with get_db() as conn:
-                            bilar = conn.execute(
-                                "SELECT id, regnr, fordonsnummer, marke, modell, arsmodell, notering FROM bilar WHERE verkstad_id = ?",
-                                (verkstad_id,)
-                            ).fetchall()
-                            handelser = conn.execute("""
-                                SELECT h.*, b.regnr, b.fordonsnummer, b.marke, b.modell
-                                FROM handelser h
-                                JOIN bilar b ON h.bil_id = b.id
-                                WHERE b.verkstad_id = ?
-                            """, (verkstad_id,)).fetchall()
-                        with open(fil, "w", newline="", encoding="utf-8") as f:
-                            writer = csv.writer(f)
-                            writer.writerow(["## BILAR"])
-                            writer.writerow(["id","regnr","fordonsnummer","marke","modell","arsmodell","notering"])
-                            for b in bilar:
-                                writer.writerow([
-                                    b["id"], b["regnr"], b["fordonsnummer"],
-                                    b["marke"], b["modell"], b["arsmodell"], b["notering"]
-                                ])
-                            writer.writerow([])
-                            writer.writerow(["## HÄNDELSER"])
-                            writer.writerow(["id","bil_id","regnr","fordonsnummer","marke","modell","datum","km","typ","service_typer","beskrivning"])
-                            for h in handelser:
-                                writer.writerow([
-                                    h["id"], h["bil_id"],
-                                    h["regnr"], h["fordonsnummer"], h["marke"], h["modell"],
-                                    h["datum"], h["km"], h["typ"],
-                                    h["service_typer"], h["beskrivning"]
-                                ])
+                        skriv_verkstad_csv(verkstad_id, fil)
                     except Exception as e:
                         print(f"Backup fel ({slug}): {e}")
         except Exception as e:
@@ -784,28 +790,7 @@ def superadmin_backup():
             fil = os.path.join(mapp, f"{idag}.csv")
             if os.path.exists(fil):
                 os.remove(fil)
-            with get_db() as conn:
-                bilar = conn.execute(
-                    "SELECT id, regnr, fordonsnummer, marke, modell, arsmodell, notering FROM bilar WHERE verkstad_id=?",
-                    (vid,)
-                ).fetchall()
-                handelser = conn.execute("""
-                    SELECT h.*, b.regnr, b.fordonsnummer, b.marke, b.modell
-                    FROM handelser h
-                    JOIN bilar b ON h.bil_id = b.id
-                    WHERE b.verkstad_id = ?
-                """, (vid,)).fetchall()
-            with open(fil, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(["## BILAR"])
-                writer.writerow(["id","regnr","fordonsnummer","marke","modell","arsmodell","notering"])
-                for b in bilar:
-                    writer.writerow([b["id"], b["regnr"], b["fordonsnummer"], b["marke"], b["modell"], b["arsmodell"], b["notering"]])
-                writer.writerow([])
-                writer.writerow(["## HÄNDELSER"])
-                writer.writerow(["id","bil_id","regnr","fordonsnummer","marke","modell","datum","km","typ","service_typer","beskrivning"])
-                for h in handelser:
-                    writer.writerow([h["id"], h["bil_id"], h["regnr"], h["fordonsnummer"], h["marke"], h["modell"], h["datum"], h["km"], h["typ"], h["service_typer"], h["beskrivning"]])
+            skriv_verkstad_csv(vid, fil)
     except Exception as e:
         return redirect(url_for("superadmin", msg=f"Backup fel: {e}"))
     return redirect(url_for("superadmin", msg="✓ Backup klar!"))
@@ -2270,9 +2255,49 @@ def superadmin_ta_bort(vid):
     if redir:
         return redir
     with get_db() as conn:
+        v = conn.execute("SELECT slug FROM verkstader WHERE id=?", (vid,)).fetchone()
+    if not v:
+        return redirect(url_for("superadmin", msg="Verkstaden hittades inte."))
+    slug = v["slug"]
+
+    # Skriv en sista CSV innan något raderas. Raderingen är oåterkallelig —
+    # utan detta finns bara gårdagens dagliga backup att falla tillbaka på.
+    try:
+        stampel = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        fil = os.path.join(BACKUP_DIR, slug, f"RADERAD_{stampel}.csv")
+        antal_bilar, antal_handelser = skriv_verkstad_csv(vid, fil)
+        print(f"Slutbackup före radering av '{slug}': {antal_bilar} bilar, "
+              f"{antal_handelser} händelser → {fil}")
+    except Exception as e:
+        # Går backupen inte att skriva vill vi inte radera i blindo
+        print(f"Slutbackup misslyckades för '{slug}': {e}")
+        return redirect(url_for("superadmin",
+            msg=f"Avbröt: kunde inte skriva slutbackup för '{slug}' ({e}). Inget raderat."))
+
+    # Radera allt som är knutet till verkstaden. Tidigare raderades bara
+    # verkstader + anvandare, vilket lämnade bilar, händelser, noteringar och
+    # serviceintervall kvar som föräldralösa rader — osynliga i gränssnittet
+    # eftersom varje fråga filtrerar på verkstad_id, men kvar i databasen.
+    with get_db() as conn:
+        bil_ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM bilar WHERE verkstad_id=?", (vid,))]
+        if bil_ids:
+            marks = ",".join("?" * len(bil_ids))
+            conn.execute(f"DELETE FROM handelser WHERE bil_id IN ({marks})", bil_ids)
+            conn.execute(f"DELETE FROM kommentarer WHERE bil_id IN ({marks})", bil_ids)
+            conn.execute(f"DELETE FROM serviceintervall WHERE bil_id IN ({marks})", bil_ids)
+        fm_ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM fordonsmodeller WHERE verkstad_id=?", (vid,))]
+        if fm_ids:
+            marks = ",".join("?" * len(fm_ids))
+            conn.execute(f"DELETE FROM fordonsmodell_intervall WHERE fordonsmodell_id IN ({marks})", fm_ids)
+        conn.execute("DELETE FROM fordonsmodeller WHERE verkstad_id=?", (vid,))
+        conn.execute("DELETE FROM servicetyper WHERE verkstad_id=?", (vid,))
+        conn.execute("DELETE FROM bilar WHERE verkstad_id=?", (vid,))
         conn.execute("DELETE FROM anvandare WHERE verkstad_id=?", (vid,))
         conn.execute("DELETE FROM verkstader WHERE id=?", (vid,))
-    return redirect(url_for("superadmin"))
+    return redirect(url_for("superadmin",
+        msg=f"✓ '{slug}' raderad. Slutbackup sparad som RADERAD_{stampel}.csv"))
 
 @app.route("/superadmin/redigera/<int:vid>", methods=["POST"])
 def superadmin_redigera(vid):
