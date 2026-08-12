@@ -9,3 +9,6 @@ __pycache__/
 .env
 venv/
 .backups/
+
+# macOS
+.DS_Store

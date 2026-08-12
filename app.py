@@ -105,8 +105,16 @@ def load_user(user_id):
             slug = v["slug"] if v else None
     return User(row["id"], row["username"], row["namn"], row["roll"], row["verkstad_id"], slug)
 
+def ny_session_token():
+    """Slumpat token som binder en inloggad session till användarraden i DB.
+    Sätts om vid lösenordsbyte → alla gamla sessioner blir ogiltiga."""
+    return secrets.token_hex(32)
+
 @app.before_request
 def validate_session_token():
+    # Statiska filer behöver ingen DB-slagning
+    if request.endpoint == "static":
+        return None
     if current_user.is_authenticated:
         stored = session.get("session_token")
         with get_db() as conn:
@@ -376,23 +384,38 @@ def init_db():
         try:
             conn.execute("ALTER TABLE anvandare ADD COLUMN session_token TEXT")
         except: pass
+        # Migration: ge bilar UNIQUE(regnr, verkstad_id).
+        # VIKTIGT: körs bara om spärren saknas. Utan denna kontroll droppades och
+        # återskapades hela bilar-tabellen vid VARJE appstart — data överlevde
+        # normalt, men en krasch mellan DROP och RENAME hade raderat alla fordon.
         try:
-            conn.executescript("""
-                CREATE TABLE IF NOT EXISTS bilar_ny (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    regnr TEXT NOT NULL,
-                    fordonsnummer TEXT,
-                    marke TEXT NOT NULL,
-                    modell TEXT NOT NULL,
-                    arsmodell INTEGER,
-                    notering TEXT,
-                    verkstad_id INTEGER,
-                    UNIQUE(regnr, verkstad_id)
-                );
-                INSERT OR IGNORE INTO bilar_ny SELECT * FROM bilar;
-                DROP TABLE bilar;
-                ALTER TABLE bilar_ny RENAME TO bilar;
-            """)
+            bilar_sql = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='bilar'"
+            ).fetchone()
+            redan_migrerad = bool(bilar_sql) and "UNIQUE" in (bilar_sql["sql"] or "").upper()
+            if not redan_migrerad:
+                antal_innan = conn.execute("SELECT COUNT(*) FROM bilar").fetchone()[0]
+                conn.executescript("""
+                    CREATE TABLE IF NOT EXISTS bilar_ny (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        regnr TEXT NOT NULL,
+                        fordonsnummer TEXT,
+                        marke TEXT NOT NULL,
+                        modell TEXT NOT NULL,
+                        arsmodell INTEGER,
+                        notering TEXT,
+                        verkstad_id INTEGER,
+                        UNIQUE(regnr, verkstad_id)
+                    );
+                    INSERT OR IGNORE INTO bilar_ny SELECT * FROM bilar;
+                    DROP TABLE bilar;
+                    ALTER TABLE bilar_ny RENAME TO bilar;
+                """)
+                antal_efter = conn.execute("SELECT COUNT(*) FROM bilar").fetchone()[0]
+                print(f"Migration bilar: klar ({antal_innan} → {antal_efter} fordon)")
+                if antal_efter < antal_innan:
+                    print(f"VARNING: {antal_innan - antal_efter} fordon föll bort "
+                          f"(dubbletter på regnr inom samma verkstad?)")
         except Exception as e:
             print(f"Migration bilar: {e}")
         # Migration: lägg till verkstad_id i fordonsmodeller om den saknas
@@ -473,6 +496,27 @@ def init_db():
                 conn.execute("DELETE FROM servicetyper WHERE kategori='intervall'")
         except Exception as e:
             print(f"Migration servicetyper: {e}")
+
+        # ── INDEX ────────────────────────────────────────────────────────────
+        # Rent additivt: skapar bara uppslagsstrukturer, rör ingen data.
+        # Måste ligga sist — bilar-migrationen ovan droppar tabellen (och därmed
+        # dess index) första gången den körs.
+        try:
+            conn.executescript("""
+                CREATE INDEX IF NOT EXISTS idx_handelser_bil_km   ON handelser(bil_id, km DESC);
+                CREATE INDEX IF NOT EXISTS idx_kommentarer_bil    ON kommentarer(bil_id);
+                CREATE INDEX IF NOT EXISTS idx_serviceintervall_bil ON serviceintervall(bil_id);
+                CREATE INDEX IF NOT EXISTS idx_bilar_verkstad     ON bilar(verkstad_id);
+                CREATE INDEX IF NOT EXISTS idx_anvandare_verkstad ON anvandare(verkstad_id);
+                CREATE INDEX IF NOT EXISTS idx_fordonsmodeller_uppslag
+                    ON fordonsmodeller(verkstad_id, marke, modell);
+                CREATE INDEX IF NOT EXISTS idx_fm_intervall_fm
+                    ON fordonsmodell_intervall(fordonsmodell_id);
+                CREATE INDEX IF NOT EXISTS idx_servicetyper_uppslag
+                    ON servicetyper(verkstad_id, kategori, ordning);
+            """)
+        except Exception as e:
+            print(f"Index: {e}")
 
 def get_fordonsmodell_intervall(marke, modell, arsmodell, verkstad_id=None):
     with get_db() as conn:
@@ -1004,10 +1048,13 @@ def redigera_bil(bil_id):
         if not marke or not modell:
             error = "Märke och modell är obligatoriska."
         else:
+            # Spara som heltal likt ny_bil — annars hamnar text i en INTEGER-kolumn
+            # och matchningen mot fordonsmodeller (arsmodell=?) slutar fungera.
+            ar = int(arsmodell) if arsmodell.isdigit() else None
             with get_db() as conn:
                 conn.execute(
                     "UPDATE bilar SET marke=?,modell=?,fordonsnummer=?,arsmodell=?,notering=? WHERE id=?",
-                    (marke, modell, fordonsnummer or None, arsmodell or None, notering, bil_id)
+                    (marke, modell, fordonsnummer or None, ar, notering, bil_id)
                 )
             iv_dict = {}
             for t in get_nedraknare_typer(b["verkstad_id"]):
@@ -1803,13 +1850,22 @@ def login():
                 with get_db() as conn2:
                     v = conn2.execute("SELECT slug FROM verkstader WHERE id=?", (row["verkstad_id"],)).fetchone()
                     slug = v["slug"] if v else None
+            # Användare som aldrig bytt lösenord saknar token (NULL). Skapa ett vid
+            # inloggning så att lösenordsbyte faktiskt kan ogiltigförklara sessionen.
+            # Befintligt token behålls → inloggning på en enhet loggar inte ut andra.
+            aktivt_token = row["session_token"]
+            if not aktivt_token:
+                aktivt_token = ny_session_token()
+                with get_db() as conn2:
+                    conn2.execute("UPDATE anvandare SET session_token=? WHERE id=?",
+                        (aktivt_token, row["id"]))
             with get_db() as conn2:
                 conn2.execute("UPDATE anvandare SET senaste_inloggning=? WHERE id=?",
                     (datetime.now().strftime("%Y-%m-%d %H:%M"), row["id"]))
             user = User(row["id"], row["username"], row["namn"], row["roll"], row["verkstad_id"], slug)
             session.permanent = True
             login_user(user, remember=False)
-            session["session_token"] = row["session_token"]
+            session["session_token"] = aktivt_token
             next_url = request.args.get("next")
             # Säker redirect: måste vara relativ URL på samma domän
             # Blockerar //evil.com, http://evil.com, javascript: etc.
@@ -2026,13 +2082,16 @@ def byt_losenord(anv_id):
         abort(403)
     password = request.form.get("password","")
     if password:
+        if len(password) < 8:
+            return redirect(url_for("admin", error="Lösenordet måste vara minst 8 tecken."))
+        # Nytt token (ej NULL): NULL matchade sessioner som också hade None,
+        # så gamla sessioner överlevde lösenordsbytet.
         with get_db() as conn:
-            rows = conn.execute(
-                "UPDATE anvandare SET password_hash=? WHERE id=?",
-                (generate_password_hash(password, method="pbkdf2:sha256"), anv_id)
-            ).rowcount
-            if rows:
-                conn.execute("UPDATE anvandare SET session_token=NULL WHERE id=?", (anv_id,))
+            conn.execute(
+                "UPDATE anvandare SET password_hash=?, session_token=? WHERE id=?",
+                (generate_password_hash(password, method="pbkdf2:sha256"),
+                 ny_session_token(), anv_id)
+            )
     return redirect(url_for("admin"))
 
 @app.route("/admin/ta-bort/<int:anv_id>", methods=["POST"])
@@ -2059,16 +2118,20 @@ def mitt_konto():
             error = "De nya lösenorden matchar inte."
         elif not nytt:
             error = "Ange ett nytt lösenord."
+        elif len(nytt) < 8:
+            error = "Lösenordet måste vara minst 8 tecken."
         else:
             with get_db() as conn:
                 row = conn.execute("SELECT * FROM anvandare WHERE id=?", (current_user.id,)).fetchone()
             if check_password_hash(row["password_hash"], gammalt):
+                # Rotera token i samma UPDATE: andra enheter loggas ut,
+                # den här sessionen får det nya tokenet direkt.
+                ny_token = ny_session_token()
                 with get_db() as conn:
-                    conn.execute("UPDATE anvandare SET password_hash=? WHERE id=?",
-                        (generate_password_hash(nytt, method="pbkdf2:sha256"), current_user.id))
-                ny_token = secrets.token_hex(16)
-                with get_db() as conn:
-                    conn.execute("UPDATE anvandare SET session_token=? WHERE id=?", (ny_token, current_user.id))
+                    conn.execute(
+                        "UPDATE anvandare SET password_hash=?, session_token=? WHERE id=?",
+                        (generate_password_hash(nytt, method="pbkdf2:sha256"),
+                         ny_token, current_user.id))
                 session["session_token"] = ny_token
                 success = "Lösenordet är uppdaterat!"
             else:
@@ -2195,6 +2258,8 @@ def superadmin_pausa(vid):
         return redir
     with get_db() as conn:
         v = conn.execute("SELECT status FROM verkstader WHERE id=?", (vid,)).fetchone()
+        if not v:
+            return redirect(url_for("superadmin", msg="Verkstaden hittades inte."))
         ny_status = "pausad" if v["status"] == "aktiv" else "aktiv"
         conn.execute("UPDATE verkstader SET status=? WHERE id=?", (ny_status, vid))
     return redirect(url_for("superadmin"))
@@ -2271,15 +2336,12 @@ def superadmin_byt_losenord(vid):
     # Använd explicit pbkdf2:sha256 — undviker scrypt-kompatibilitetsproblem på Azure
     from werkzeug.security import generate_password_hash
     ny_hash = generate_password_hash(nytt_losenord, method="pbkdf2:sha256")
+    # Nytt token (ej NULL) så att admins gamla sessioner faktiskt loggas ut.
     with get_db() as conn:
         rows = conn.execute(
-            "UPDATE anvandare SET password_hash=? WHERE verkstad_id=? AND roll='admin'",
-            (ny_hash, vid)
+            "UPDATE anvandare SET password_hash=?, session_token=? WHERE verkstad_id=? AND roll='admin'",
+            (ny_hash, ny_session_token(), vid)
         ).rowcount
-        if rows:
-            conn.execute(
-                "UPDATE anvandare SET session_token=NULL WHERE verkstad_id=? AND roll='admin'", (vid,)
-            )
     if rows:
         return redirect(url_for("superadmin", msg="✓ Lösenordet är uppdaterat!"))
     return redirect(url_for("superadmin", msg="Ingen admin-användare hittades för den verkstaden."))
