@@ -2,6 +2,9 @@
 <html lang="sv">
 <head>
   <meta charset="UTF-8">
+  <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
+  <link rel="icon" href="{{ url_for('static', filename='favicon-32.png') }}" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}Revvbase{% endblock %}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">

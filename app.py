@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, session, abort
+from flask import Flask, render_template, request, redirect, url_for, session, abort, send_from_directory
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_wtf.csrf import CSRFProtect, CSRFError
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -956,6 +956,16 @@ def superadmin_backup():
         return redirect(url_for("superadmin", msg=f"Backup fel: {e}"))
     return redirect(url_for("superadmin", msg="✓ Backup klar!"))
 
+
+@app.route("/favicon.ico")
+def favicon():
+    """Webbläsare hämtar /favicon.ico automatiskt. Utan den här rutten fångades
+    anropet av /<slug>, som kräver inloggning — så ikonen blev en redirect till
+    login och visades aldrig."""
+    return send_from_directory(
+        os.path.join(app.root_path, "static"), "favicon.ico",
+        mimetype="image/vnd.microsoft.icon"
+    )
 
 @app.route("/")
 def landing():
