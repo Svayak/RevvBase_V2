@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, redirect, url_for, session, abort
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
-from flask_wtf.csrf import CSRFProtect
+from flask_wtf.csrf import CSRFProtect, CSRFError
 from werkzeug.security import generate_password_hash, check_password_hash
 import sqlite3, json, os, csv, threading, time, secrets
 from datetime import date, datetime
@@ -11,6 +11,11 @@ app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
 app.config["PERMANENT_SESSION_LIFETIME"] = 8 * 60 * 60
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+# CSRF-token ska leva lika länge som sessionen. Standard är 1 timme, medan
+# sessionen varar 8 — en flik som stått öppen över lunchen gav "Bad Request"
+# utan väg tillbaka. Token är fortfarande bunden till sessionen, så skyddet
+# är intakt: den upphör när sessionen gör det.
+app.config["WTF_CSRF_TIME_LIMIT"] = None
 
 _KEY_FILE = os.path.join(os.path.dirname(__file__), ".secret_key")
 if os.environ.get("SECRET_KEY"):
@@ -28,6 +33,19 @@ DB = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "verkstad
 
 csrf = CSRFProtect(app)
 login_manager = LoginManager()
+
+@app.errorhandler(CSRFError)
+def csrf_fel(e):
+    """Vänlig felsida i stället för Flasks råa 'Bad Request'.
+    Referer pekar tillbaka dit användaren kom ifrån, så inget arbete tappas
+    i onödan — men bara om det är en intern adress."""
+    tillbaka = request.referrer or ""
+    if tillbaka:
+        from urllib.parse import urlparse
+        p = urlparse(tillbaka)
+        if p.netloc and p.netloc != request.host:
+            tillbaka = ""
+    return render_template("csrf_fel.html", tillbaka=tillbaka, orsak=e.description), 400
 
 @app.after_request
 def security_headers(response):

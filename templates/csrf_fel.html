@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sidan hann bli gammal – Revvbase</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <div class="csrf-sida">
+    <svg width="132" height="47" viewBox="0 0 680 240.05" role="img" style="display:block;margin:0 auto 2rem;">
+      <title>Revvbase</title>
+      <text x="340" y="120" text-anchor="middle" font-size="96" fill="#f0a500" style="font-family:'Arial Black','Helvetica Neue',Arial,sans-serif;font-weight:900;">REVV</text>
+      <text x="340" y="200" text-anchor="middle" font-size="96" fill="#e8eaec" style="font-family:'Arial Black','Helvetica Neue',Arial,sans-serif;font-weight:900;">BASE</text>
+    </svg>
+
+    <h1 class="csrf-sida__titel">Sidan hann bli gammal</h1>
+    <p class="csrf-sida__text">
+      Formuläret du skickade hade stått öppet för länge, eller så har du loggats
+      ut i en annan flik. <strong>Ingenting har sparats</strong> — ladda om sidan
+      och gör om det du höll på med.
+    </p>
+
+    <div class="csrf-sida__knappar">
+      {% if tillbaka %}
+      <a href="{{ tillbaka }}" class="btn btn-primary">Ladda om sidan</a>
+      {% endif %}
+      <a href="{{ url_for('index') }}" class="btn btn-ghost">Till alla bilar</a>
+      <a href="{{ url_for('login') }}" class="btn btn-ghost">Logga in igen</a>
+    </div>
+
+    <p class="csrf-sida__detalj">{{ orsak }}</p>
+  </div>
+</body>
+</html>
