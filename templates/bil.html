@@ -8,7 +8,7 @@
     {% if bil.fordonsnummer %}<div class="bil-fnum">Fordon {{ bil.fordonsnummer }}</div>{% endif %}
     <div class="bil-regnr-large">{{ bil.regnr }}</div>
     <div class="bil-meta">{{ bil.marke }} {{ bil.modell }}{% if bil.arsmodell %} · {{ bil.arsmodell }}{% endif %}</div>
-    {% if bil.notering %}<div class="bil-notering">{{ bil.notering }}</div>{% endif %}
+    {% if bil.kategori %}<div class="bil-notering">{{ bil.kategori }}</div>{% endif %}
   </div>
   <div class="bil-header__actions">
     <a href="{{ url_for('print_bil', bil_id=bil.id) }}" class="btn btn-ghost btn-sm" target="_blank">🖨 Skriv ut</a>
@@ -21,6 +21,59 @@
     <a href="{{ url_for('ny_handelse', bil_id=bil.id) }}" class="btn btn-primary">+ Ny händelse</a>
   </div>
 </div>
+
+<!-- Mätarställning -->
+<section class="km-panel" id="km">
+  <div class="km-panel__rad">
+    <div>
+      <div class="km-panel__nuvarande">
+        {{ senaste_km if senaste_km is not none else '–' }} <span class="km-panel__enhet">km</span>
+      </div>
+      <button type="button" class="km-panel__toggle" onclick="visaKmHistorik()">
+        Historik ({{ km_historik|length }})
+      </button>
+    </div>
+    <form method="post" action="{{ url_for('registrera_km', bil_id=bil.id) }}" class="km-panel__form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input class="km-panel__input" type="number" name="km" placeholder="Ny km" min="0" required
+             {% if senaste_km %}title="Senast: {{ senaste_km }} km"{% endif %}>
+      <input class="km-panel__input" type="date" name="datum" value="{{ today }}">
+      <button type="submit" class="btn btn-primary btn-sm">Registrera</button>
+    </form>
+  </div>
+
+  <div class="km-historik" id="kmHistorik" style="display:none;">
+    {% if km_historik %}
+      {% for h in km_historik %}
+      <div class="km-historik__rad">
+        <span class="km-historik__km">{{ h.km }} km</span>
+        <span class="km-historik__diff">
+          {%- if not loop.last %}+{{ h.km - km_historik[loop.index0 + 1].km }} km{% endif -%}
+        </span>
+        <span class="km-historik__meta">
+          {{ h.datum }}{% if h.skapad_av %} · {{ h.skapad_av }}{% endif %}
+        </span>
+        <form method="post" action="{{ url_for('ta_bort_handelse', bil_id=bil.id, h_id=h.id) }}"
+              onsubmit="return confirm('Ta bort avläsningen {{ h.km }} km?')" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="delete-btn" title="Ta bort">✕</button>
+        </form>
+      </div>
+      {% endfor %}
+    {% else %}
+      <p class="km-historik__meta">Inga km-avläsningar registrerade ännu.</p>
+    {% endif %}
+  </div>
+</section>
+
+<script>
+  function visaKmHistorik() {
+    var el = document.getElementById('kmHistorik');
+    el.style.display = (el.style.display === 'none') ? 'block' : 'none';
+  }
+  // Öppna direkt om man just registrerat km (#km i adressen)
+  if (window.location.hash === '#km') { visaKmHistorik(); }
+</script>
 
 <!-- Servicepanel -->
 {% if panel %}
@@ -119,7 +172,6 @@
   <div class="historik-header">
     <h2 class="section-title">Historik</h2>
     <div class="historik-header__right">
-      {% if senaste_km %}<span class="current-mil">Nuv: <strong>{{ senaste_km }} km</strong></span>{% endif %}
       <select class="filter-select" onchange="window.location=this.value">
         <option value="{{ url_for('bil', bil_id=bil.id) }}" {% if not filter_typ %}selected{% endif %}>Alla åtgärder</option>
         {% for t in service_typer %}

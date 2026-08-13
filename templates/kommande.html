@@ -31,7 +31,7 @@
           <span class="kommande-regnr">{{ item.bil.regnr }}</span>
           <span class="kommande-modell">{{ item.bil.marke }} {{ item.bil.modell }}</span>
           {% if item.bil.arsmodell %}<span class="kommande-ar">{{ item.bil.arsmodell }}</span>{% endif %}
-          {% if item.bil.notering %}<span class="kommande-notering">{{ item.bil.notering }}</span>{% endif %}
+          {% if item.bil.kategori %}<span class="kommande-notering">{{ item.bil.kategori }}</span>{% endif %}
         </div>
         <div class="kommande-kort__atgarder">
           {% for a in item.atgarder %}

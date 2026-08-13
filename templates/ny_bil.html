@@ -90,8 +90,13 @@
       <input class="form-input" type="number" name="arsmodell" id="arsmodell" placeholder="2018" min="1900" max="2100">
     </div>
     <div class="form-group">
-      <label class="form-label">Notering (valfritt)</label>
-      <input class="form-input" type="text" name="notering" placeholder="T.ex. Samtrans">
+      <label class="form-label">Kategori (valfritt)</label>
+      <input class="form-input" type="text" name="kategori" list="kategorilista"
+             placeholder="T.ex. Samtrans" autocomplete="off">
+      <datalist id="kategorilista">
+        {% for k in kategorier %}<option value="{{ k.namn }}">{% endfor %}
+      </datalist>
+      <p class="form-hint">Välj en befintlig kategori eller skriv en ny.</p>
     </div>
 
     <div class="form-section">

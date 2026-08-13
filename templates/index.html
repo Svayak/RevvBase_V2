@@ -4,10 +4,38 @@
 <div class="page-header">
   <h1 class="page-title">Bilar i systemet</h1>
   <form class="search-form" method="get" action="{{ request.path }}">
-    <input class="search-input" type="text" name="q" value="{{ q }}" placeholder="Sök reg.nr, fordonsnr, märke…" autocomplete="off">
-    {% if q %}<a href="{{ request.path }}" class="clear-search">✕</a>{% endif %}
+    <input class="search-input" type="text" name="q" value="{{ q }}" placeholder="Sök reg.nr, fordonsnr, märke, kategori…" autocomplete="off">
+    {# Behåll vald flik och sortering när man söker #}
+    {% if vald_kategori %}<input type="hidden" name="kategori" value="{{ vald_kategori }}">{% endif %}
+    <input type="hidden" name="sort" value="{{ sortering }}">
+    {% if q %}<a href="{{ request.path }}?{% if vald_kategori %}kategori={{ vald_kategori|urlencode }}&{% endif %}sort={{ sortering }}" class="clear-search">✕</a>{% endif %}
   </form>
   <a href="{{ url_for('importera_miltal') }}" class="btn btn-ghost btn-sm">📥 Importera miltal</a>
+</div>
+
+{% macro lank(kat, sort) %}{{ request.path }}?{% if q %}q={{ q|urlencode }}&{% endif %}{% if kat %}kategori={{ kat|urlencode }}&{% endif %}sort={{ sort }}{% endmacro %}
+
+{% if kategorier %}
+<div class="kat-flikar">
+  <a class="kat-flik{% if not vald_kategori %} kat-flik--aktiv{% endif %}"
+     href="{{ lank('', sortering) }}">Alla <span class="kat-flik__antal">{{ totalt }}</span></a>
+  {% for k in kategorier %}
+  <a class="kat-flik{% if vald_kategori == k.namn %} kat-flik--aktiv{% endif %}"
+     href="{{ lank(k.namn, sortering) }}">{{ k.namn }} <span class="kat-flik__antal">{{ k.antal }}</span></a>
+  {% endfor %}
+  {% if antal_utan_kategori %}
+  <a class="kat-flik{% if vald_kategori == '_utan' %} kat-flik--aktiv{% endif %}"
+     href="{{ lank('_utan', sortering) }}">Utan kategori <span class="kat-flik__antal">{{ antal_utan_kategori }}</span></a>
+  {% endif %}
+</div>
+{% endif %}
+
+<div class="sortering">
+  <span class="sortering__label">Sortera:</span>
+  <a class="sortering__val{% if sortering == 'fordonsnummer' %} sortering__val--aktiv{% endif %}"
+     href="{{ lank(vald_kategori, 'fordonsnummer') }}">Fordonsnummer</a>
+  <a class="sortering__val{% if sortering == 'regnr' %} sortering__val--aktiv{% endif %}"
+     href="{{ lank(vald_kategori, 'regnr') }}">Reg.nr</a>
 </div>
 
 {% if bilar %}
@@ -21,7 +49,7 @@
       <span class="car-card__modell">{{ b.modell }}</span>
       {% if b.arsmodell %}<span class="car-card__ar">{{ b.arsmodell }}</span>{% endif %}
     </div>
-    {% if b.notering %}<div class="car-card__notering">{{ b.notering }}</div>{% endif %}
+    {% if b.kategori %}<div class="car-card__notering">{{ b.kategori }}</div>{% endif %}
     {% if senaste_kommentar.get(b.id) %}<div class="car-card__kommentar">🗒 {{ senaste_kommentar[b.id] }}</div>{% endif %}
     <div class="car-card__arrow">→</div>
   </a>
@@ -29,8 +57,8 @@
 </div>
 {% else %}
 <div class="empty-state">
-  {% if q %}
-    <p>Inga bilar matchade sökningen.</p>
+  {% if q or vald_kategori %}
+    <p>Inga bilar matchade{% if vald_kategori and vald_kategori != '_utan' %} i kategorin {{ vald_kategori }}{% endif %}.</p>
     <a href="{{ request.path }}" class="btn btn-ghost">Visa alla</a>
   {% else %}
     <p>Inga bilar inlagda ännu.</p>

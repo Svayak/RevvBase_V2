@@ -940,3 +940,122 @@ code { background: var(--bg3); padding: 0.1rem 0.4rem; border-radius: 3px; font-
   .bil-header__actions { grid-template-columns:1fr; }
   .mil-grid { grid-template-columns:repeat(2,1fr); }
 }
+
+/* ── KATEGORIFLIKAR ── */
+.kat-flikar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.9rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+.kat-flik {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  padding: 0.35rem 0.75rem;
+  text-decoration: none;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.kat-flik:hover { color: var(--text); border-color: var(--text-muted); }
+.kat-flik--aktiv {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.kat-flik__antal {
+  font-size: 0.75rem;
+  background: var(--bg3);
+  color: var(--text-muted);
+  border-radius: 10px;
+  padding: 0.05rem 0.4rem;
+  min-width: 1.2rem;
+  text-align: center;
+}
+.kat-flik--aktiv .kat-flik__antal { background: rgba(0,0,0,0.35); color: var(--accent); }
+
+/* ── SORTERINGSVÄXEL ── */
+.sortering {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  font-size: 0.82rem;
+}
+.sortering__label { color: var(--text-muted); }
+.sortering__val {
+  color: var(--text-muted);
+  text-decoration: none;
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--radius);
+  transition: color 0.15s, background 0.15s;
+}
+.sortering__val:hover { color: var(--text); background: var(--bg2); }
+.sortering__val--aktiv { color: var(--accent); background: var(--accent-dim); font-weight: 600; }
+
+.form-hint {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin: 0.3rem 0 0;
+}
+
+/* ── KM-PANEL ── */
+.km-panel {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 0.9rem 1rem;
+  margin-bottom: 1rem;
+}
+.km-panel__rad { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; }
+.km-panel__nuvarande { font-family: var(--font-head); font-size: 1.6rem; font-weight: 700; }
+.km-panel__enhet { font-size: 0.85rem; color: var(--text-muted); font-weight: 400; }
+.km-panel__form { display: flex; gap: 0.4rem; margin-left: auto; flex-wrap: wrap; }
+.km-panel__input {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 0.88rem;
+  padding: 0.4rem 0.6rem;
+  width: 8rem;
+  outline: none;
+}
+.km-panel__input:focus { border-color: var(--accent); }
+.km-historik { margin-top: 0.8rem; border-top: 1px solid var(--border); padding-top: 0.7rem; }
+.km-historik__rad {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+  font-size: 0.84rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.km-historik__rad:last-child { border-bottom: none; }
+.km-historik__km { font-weight: 600; }
+.km-historik__meta { color: var(--text-muted); font-size: 0.78rem; }
+.km-historik__diff { color: var(--text-muted); font-size: 0.78rem; }
+.km-panel__toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: 0.82rem;
+  padding: 0.2rem 0;
+  text-decoration: underline;
+}
+.km-panel__toggle:hover { color: var(--accent); }
+
+@media (max-width: 560px) {
+  .km-panel__form { margin-left: 0; width: 100%; }
+  .km-panel__input { flex: 1; width: auto; }
+}

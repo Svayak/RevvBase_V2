@@ -227,6 +227,58 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
+SORTERINGAR = {
+    "fordonsnummer": "ORDER BY fordonsnummer, regnr",
+    "regnr":         "ORDER BY regnr, fordonsnummer",
+}
+SORTERING_STANDARD = "fordonsnummer"
+
+def vald_sortering():
+    """Sorteringsval från query-parameter, annars användarens senaste val.
+    Sparas i sessionen så listan ser likadan ut nästa gång."""
+    val = request.args.get("sort", "")
+    if val in SORTERINGAR:
+        session["bil_sortering"] = val
+        return val
+    return session.get("bil_sortering", SORTERING_STANDARD)
+
+def hamta_kategorier(verkstad_id):
+    """Verkstadens kategorier med antal fordon, för flikar och väljare."""
+    with get_db() as conn:
+        if verkstad_id is not None:
+            rader = conn.execute(
+                "SELECT kategori, COUNT(*) antal FROM bilar "
+                "WHERE verkstad_id=? AND kategori IS NOT NULL AND kategori<>'' "
+                "GROUP BY kategori ORDER BY kategori COLLATE NOCASE", (verkstad_id,)
+            ).fetchall()
+        else:
+            rader = conn.execute(
+                "SELECT kategori, COUNT(*) antal FROM bilar "
+                "WHERE kategori IS NOT NULL AND kategori<>'' "
+                "GROUP BY kategori ORDER BY kategori COLLATE NOCASE"
+            ).fetchall()
+    return [{"namn": r["kategori"], "antal": r["antal"]} for r in rader]
+
+def hamta_bilar(verkstad_id, q="", kategori="", sortering=SORTERING_STANDARD):
+    """Fordonslistan med sök, kategorifilter och sortering i en fråga."""
+    villkor, params = [], []
+    if verkstad_id is not None:
+        villkor.append("verkstad_id=?")
+        params.append(verkstad_id)
+    if q:
+        villkor.append("(regnr LIKE ? OR marke LIKE ? OR modell LIKE ? "
+                       "OR fordonsnummer LIKE ? OR kategori LIKE ?)")
+        params += [f"%{q}%"] * 5
+    if kategori == "_utan":
+        villkor.append("(kategori IS NULL OR kategori='')")
+    elif kategori:
+        villkor.append("kategori=?")
+        params.append(kategori)
+    where = ("WHERE " + " AND ".join(villkor)) if villkor else ""
+    order = SORTERINGAR.get(sortering, SORTERINGAR[SORTERING_STANDARD])
+    with get_db() as conn:
+        return conn.execute(f"SELECT * FROM bilar {where} {order}", params).fetchall()
+
 def hamta_senaste_kommentarer(bilar):
     """Senaste noteringen (kommentar) per bil, för visning på bilkortet."""
     senaste = {}
@@ -497,6 +549,25 @@ def init_db():
         except Exception as e:
             print(f"Migration servicetyper: {e}")
 
+        # Migration: bilar.notering → bilar.kategori.
+        # Fältet användes i praktiken redan som kategori (Samtrans, Freys …),
+        # och namnet krockade med kommentarerna som heter "noteringar" i UI:t.
+        # RENAME COLUMN behåller allt innehåll — inga värden går förlorade.
+        # Måste ligga EFTER bilar-ombyggnaden ovan, som återskapar tabellen
+        # med kolumnnamnet notering.
+        try:
+            kolumner = [r["name"] for r in conn.execute("PRAGMA table_info(bilar)")]
+            if "kategori" not in kolumner and "notering" in kolumner:
+                conn.execute("ALTER TABLE bilar RENAME COLUMN notering TO kategori")
+                antal = conn.execute(
+                    "SELECT COUNT(*) FROM bilar WHERE kategori IS NOT NULL AND kategori<>''"
+                ).fetchone()[0]
+                print(f"Migration kategori: notering → kategori ({antal} fordon har värde)")
+            elif "kategori" not in kolumner:
+                conn.execute("ALTER TABLE bilar ADD COLUMN kategori TEXT")
+        except Exception as e:
+            print(f"Migration kategori: {e}")
+
         # ── INDEX ────────────────────────────────────────────────────────────
         # Rent additivt: skapar bara uppslagsstrukturer, rör ingen data.
         # Måste ligga sist — bilar-migrationen ovan droppar tabellen (och därmed
@@ -514,6 +585,8 @@ def init_db():
                     ON fordonsmodell_intervall(fordonsmodell_id);
                 CREATE INDEX IF NOT EXISTS idx_servicetyper_uppslag
                     ON servicetyper(verkstad_id, kategori, ordning);
+                CREATE INDEX IF NOT EXISTS idx_bilar_kategori
+                    ON bilar(verkstad_id, kategori);
             """)
         except Exception as e:
             print(f"Index: {e}")
@@ -717,7 +790,7 @@ def skriv_verkstad_csv(verkstad_id, fil):
     # ändras när index läggs till. Backuperna ska vara jämförbara mellan körningar.
     with get_db() as conn:
         bilar = conn.execute(
-            "SELECT id, regnr, fordonsnummer, marke, modell, arsmodell, notering "
+            "SELECT id, regnr, fordonsnummer, marke, modell, arsmodell, kategori "
             "FROM bilar WHERE verkstad_id = ? ORDER BY id",
             (verkstad_id,)
         ).fetchall()
@@ -732,10 +805,10 @@ def skriv_verkstad_csv(verkstad_id, fil):
     with open(fil, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["## BILAR"])
-        writer.writerow(["id","regnr","fordonsnummer","marke","modell","arsmodell","notering"])
+        writer.writerow(["id","regnr","fordonsnummer","marke","modell","arsmodell","kategori"])
         for b in bilar:
             writer.writerow([b["id"], b["regnr"], b["fordonsnummer"],
-                             b["marke"], b["modell"], b["arsmodell"], b["notering"]])
+                             b["marke"], b["modell"], b["arsmodell"], b["kategori"]])
         writer.writerow([])
         writer.writerow(["## HÄNDELSER"])
         writer.writerow(["id","bil_id","regnr","fordonsnummer","marke","modell","datum","km","typ","service_typer","beskrivning"])
@@ -825,31 +898,7 @@ def slug_dashboard(slug):
         if current_user.slug:
             return redirect(f"/{current_user.slug}")
         return redirect(url_for("index"))
-    q = request.args.get("q", "").strip()
-    vid = current_user.verkstad_id
-    with get_db() as conn:
-        if q:
-            if vid is not None:
-                bilar = conn.execute(
-                    "SELECT * FROM bilar WHERE verkstad_id=? AND (regnr LIKE ? OR marke LIKE ? OR modell LIKE ? OR fordonsnummer LIKE ? OR notering LIKE ?) ORDER BY regnr",
-                    (vid, f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%")
-                ).fetchall()
-            else:
-                bilar = conn.execute(
-                    "SELECT * FROM bilar WHERE regnr LIKE ? OR marke LIKE ? OR modell LIKE ? OR fordonsnummer LIKE ? OR notering LIKE ? ORDER BY regnr",
-                    (f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%")
-                ).fetchall()
-        else:
-            if vid is not None:
-                bilar = conn.execute(
-                    "SELECT * FROM bilar WHERE verkstad_id=? ORDER BY fordonsnummer, regnr", (vid,)
-                ).fetchall()
-            else:
-                bilar = conn.execute(
-                    "SELECT * FROM bilar ORDER BY fordonsnummer, regnr"
-                ).fetchall()
-    return render_template("index.html", bilar=bilar, q=q,
-        senaste_kommentar=hamta_senaste_kommentarer(bilar))
+    return visa_billista()
 
 @app.route("/dashboard")
 @login_required
@@ -859,30 +908,20 @@ def index():
     pausad = check_aktiv()
     if pausad:
         return pausad
-    q = request.args.get("q", "").strip()
+    return visa_billista()
+
+def visa_billista():
+    """Fordonslistan — delad av /<slug> och /dashboard."""
     vid = current_user.verkstad_id
-    with get_db() as conn:
-        if q:
-            if vid is not None:
-                bilar = conn.execute(
-                    "SELECT * FROM bilar WHERE verkstad_id=? AND (regnr LIKE ? OR marke LIKE ? OR modell LIKE ? OR fordonsnummer LIKE ? OR notering LIKE ?) ORDER BY regnr",
-                    (vid, f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%")
-                ).fetchall()
-            else:
-                bilar = conn.execute(
-                    "SELECT * FROM bilar WHERE regnr LIKE ? OR marke LIKE ? OR modell LIKE ? OR fordonsnummer LIKE ? OR notering LIKE ? ORDER BY regnr",
-                    (f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%")
-                ).fetchall()
-        else:
-            if vid is not None:
-                bilar = conn.execute(
-                    "SELECT * FROM bilar WHERE verkstad_id=? ORDER BY fordonsnummer, regnr", (vid,)
-                ).fetchall()
-            else:
-                bilar = conn.execute(
-                    "SELECT * FROM bilar ORDER BY fordonsnummer, regnr"
-                ).fetchall()
+    q = request.args.get("q", "").strip()
+    kategori = request.args.get("kategori", "").strip()
+    sortering = vald_sortering()
+    bilar = hamta_bilar(vid, q, kategori, sortering)
     return render_template("index.html", bilar=bilar, q=q,
+        kategorier=hamta_kategorier(vid), vald_kategori=kategori,
+        sortering=sortering,
+        antal_utan_kategori=len(hamta_bilar(vid, q, "_utan", sortering)),
+        totalt=len(hamta_bilar(vid, q, "", sortering)),
         senaste_kommentar=hamta_senaste_kommentarer(bilar))
 
 @app.route("/bil/ny", methods=["GET","POST"])
@@ -910,7 +949,7 @@ def ny_bil():
         marke         = request.form.get("marke","").strip()
         modell        = request.form.get("modell","").strip()
         arsmodell     = request.form.get("arsmodell","").strip()
-        notering      = request.form.get("notering","").strip()
+        kategori      = request.form.get("kategori","").strip()
 
         if not regnr or not marke or not modell:
             error = "Reg.nr, märke och modell är obligatoriska."
@@ -937,8 +976,8 @@ def ny_bil():
                 try:
                     with get_db() as conn:
                         cur = conn.execute(
-                            "INSERT INTO bilar (regnr,fordonsnummer,marke,modell,arsmodell,notering,verkstad_id) VALUES (?,?,?,?,?,?,?)",
-                            (regnr, fordonsnummer or None, marke, modell, ar, notering or None, vid)
+                            "INSERT INTO bilar (regnr,fordonsnummer,marke,modell,arsmodell,kategori,verkstad_id) VALUES (?,?,?,?,?,?,?)",
+                            (regnr, fordonsnummer or None, marke, modell, ar, kategori or None, vid)
                         )
                         bil_id = cur.lastrowid
 
@@ -981,7 +1020,8 @@ def ny_bil():
 
     return render_template("ny_bil.html", error=error,
         nedraknare_typer=get_nedraknare_typer(current_user.verkstad_id),
-        nedraknare_standard=get_nedraknare_standardkm(current_user.verkstad_id), bibliotek=bibliotek)
+        nedraknare_standard=get_nedraknare_standardkm(current_user.verkstad_id), bibliotek=bibliotek,
+        kategorier=hamta_kategorier(current_user.verkstad_id))
 
 @app.route("/bil/<int:bil_id>")
 @login_required
@@ -989,15 +1029,23 @@ def bil(bil_id):
     b = check_bil_access(bil_id)
     filter_typ = request.args.get("filter", "").strip()
     with get_db() as conn:
+        # Rena km-avläsningar hör hemma i km-panelen, inte i händelsetidslinjen —
+        # de utgjorde en tredjedel av historiken och dränkte service och fel.
         if filter_typ:
             handelser = conn.execute(
-                "SELECT * FROM handelser WHERE bil_id=? AND service_typer LIKE ? ORDER BY km DESC, datum DESC",
+                "SELECT * FROM handelser WHERE bil_id=? AND typ<>'miltal' AND service_typer LIKE ? "
+                "ORDER BY km DESC, datum DESC",
                 (bil_id, f"%{filter_typ}%")
             ).fetchall()
         else:
             handelser = conn.execute(
-                "SELECT * FROM handelser WHERE bil_id=? ORDER BY km DESC, datum DESC", (bil_id,)
+                "SELECT * FROM handelser WHERE bil_id=? AND typ<>'miltal' ORDER BY km DESC, datum DESC",
+                (bil_id,)
             ).fetchall()
+        km_historik = conn.execute(
+            "SELECT * FROM handelser WHERE bil_id=? AND typ='miltal' ORDER BY km DESC, datum DESC",
+            (bil_id,)
+        ).fetchall()
         alla_handelser = conn.execute(
             "SELECT * FROM handelser WHERE bil_id=? ORDER BY km DESC", (bil_id,)
         ).fetchall()
@@ -1013,10 +1061,27 @@ def bil(bil_id):
     senaste_km = alla_handelser[0]["km"] if alla_handelser else None
     panel = bygg_panel(bil_id, b["marke"], b["modell"], alla_handelser, senaste_km, b["arsmodell"], b["verkstad_id"])
     return render_template("bil.html", bil=b, handelser=handelser,
-        panel=panel, senaste_km=senaste_km,
+        panel=panel, senaste_km=senaste_km, km_historik=km_historik, today=str(date.today()),
         service_typer=get_service_typer(b["verkstad_id"]), filter_typ=filter_typ,
         kommentarer=kommentarer, avklarade_kommentarer=avklarade_kommentarer,
         arbetsorder_marginal=get_arbetsorder_marginal(b["verkstad_id"]))
+
+@app.route("/bil/<int:bil_id>/registrera-km", methods=["POST"])
+@login_required
+def registrera_km(bil_id):
+    """Snabbregistrering av mätarställning direkt från km-panelen,
+    utan att gå igenom trestegsflödet för nya händelser."""
+    check_bil_access(bil_id)
+    km_str = request.form.get("km", "").strip()
+    if km_str.isdigit():
+        datum = request.form.get("datum", "").strip() or str(date.today())
+        with get_db() as conn:
+            conn.execute(
+                "INSERT INTO handelser (bil_id,datum,km,typ,service_typer,beskrivning,skapad_av) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (bil_id, datum, int(km_str), "miltal", None, None, current_user.namn)
+            )
+    return redirect(url_for("bil", bil_id=bil_id) + "#km")
 
 @app.route("/bil/<int:bil_id>/redigera", methods=["GET","POST"])
 @login_required
@@ -1029,7 +1094,7 @@ def redigera_bil(bil_id):
         modell        = request.form.get("modell","").strip()
         fordonsnummer = request.form.get("fordonsnummer","").strip()
         arsmodell     = request.form.get("arsmodell","").strip()
-        notering      = request.form.get("notering","").strip()
+        kategori      = request.form.get("kategori","").strip()
         if not marke or not modell:
             error = "Märke och modell är obligatoriska."
         else:
@@ -1038,8 +1103,8 @@ def redigera_bil(bil_id):
             ar = int(arsmodell) if arsmodell.isdigit() else None
             with get_db() as conn:
                 conn.execute(
-                    "UPDATE bilar SET marke=?,modell=?,fordonsnummer=?,arsmodell=?,notering=? WHERE id=?",
-                    (marke, modell, fordonsnummer or None, ar, notering, bil_id)
+                    "UPDATE bilar SET marke=?,modell=?,fordonsnummer=?,arsmodell=?,kategori=? WHERE id=?",
+                    (marke, modell, fordonsnummer or None, ar, kategori or None, bil_id)
                 )
             iv_dict = {}
             for t in get_nedraknare_typer(b["verkstad_id"]):
@@ -1056,7 +1121,8 @@ def redigera_bil(bil_id):
             spara_intervall(bil_id, iv_dict, b["verkstad_id"])
             return redirect(url_for("bil", bil_id=bil_id))
     return render_template("redigera_bil.html", bil=b, error=error,
-        intervaller=intervaller, nedraknare_typer=get_nedraknare_typer(b["verkstad_id"]))
+        intervaller=intervaller, nedraknare_typer=get_nedraknare_typer(b["verkstad_id"]),
+        kategorier=hamta_kategorier(b["verkstad_id"]))
 
 @app.route("/bil/<int:bil_id>/ny-handelse", methods=["GET","POST"])
 @login_required
@@ -1781,12 +1847,12 @@ def exportera_data():
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["regnr", "fordonsnummer", "marke", "modell", "arsmodell", "notering",
+    writer.writerow(["regnr", "fordonsnummer", "marke", "modell", "arsmodell", "kategori",
                      "datum", "km", "typ", "service_typer", "beskrivning", "skapad_av"])
     for b, h in handelser:
         writer.writerow([
             b["regnr"], b["fordonsnummer"] or "", b["marke"], b["modell"],
-            b["arsmodell"] or "", b["notering"] or "",
+            b["arsmodell"] or "", b["kategori"] or "",
             h["datum"], h["km"], h["typ"],
             h["service_typer"] or "", h["beskrivning"] or "", h["skapad_av"] or ""
         ])
@@ -1794,7 +1860,7 @@ def exportera_data():
         for b in bilar:
             writer.writerow([
                 b["regnr"], b["fordonsnummer"] or "", b["marke"], b["modell"],
-                b["arsmodell"] or "", b["notering"] or "",
+                b["arsmodell"] or "", b["kategori"] or "",
                 "", "", "", "", "", ""
             ])
 

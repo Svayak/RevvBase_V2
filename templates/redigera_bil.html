@@ -33,8 +33,13 @@
       <input class="form-input" type="number" name="arsmodell" value="{{ bil.arsmodell or '' }}">
     </div>
     <div class="form-group">
-      <label class="form-label">Notering</label>
-      <input class="form-input" type="text" name="notering" value="{{ bil.notering or '' }}">
+      <label class="form-label">Kategori</label>
+      <input class="form-input" type="text" name="kategori" list="kategorilista"
+             value="{{ bil.kategori or '' }}" placeholder="T.ex. Samtrans" autocomplete="off">
+      <datalist id="kategorilista">
+        {% for k in kategorier %}<option value="{{ k.namn }}">{% endfor %}
+      </datalist>
+      <p class="form-hint">Välj en befintlig kategori eller skriv en ny.</p>
     </div>
 
     <div class="form-section">

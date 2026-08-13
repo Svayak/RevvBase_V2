@@ -64,7 +64,7 @@
   <div class="ao-regnr">{{ item.bil.regnr }}</div>
   <div class="ao-meta">{{ item.bil.marke }} {{ item.bil.modell }}{% if item.bil.arsmodell %} · {{ item.bil.arsmodell }}{% endif %}</div>
   {% if item.bil.fordonsnummer %}<div class="ao-meta">Fordonsnummer: <strong>{{ item.bil.fordonsnummer }}</strong></div>{% endif %}
-  {% if item.bil.notering %}<div class="ao-kommentar">{{ item.bil.notering }}</div>{% endif %}
+  {% if item.bil.kategori %}<div class="ao-kommentar">{{ item.bil.kategori }}</div>{% endif %}
   <div class="ao-km">Nuvarande km: <strong>{{ item.senaste_km }} km</strong></div>
   <div class="ao-datum">Utfärdad: {{ today }}</div>
 
