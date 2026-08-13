@@ -91,6 +91,16 @@
         {% if typ == "fel" %}required{% endif %}></textarea>
     </div>
     <div class="form-group">
+      <label class="form-label">Utförd av</label>
+      <select class="form-input" name="utford_av">
+        <option value="">{{ current_user.namn }} (jag)</option>
+        {% for m in mekaniker %}
+          {% if m.namn != current_user.namn %}<option value="{{ m.namn }}">{{ m.namn }}</option>{% endif %}
+        {% endfor %}
+      </select>
+      <p class="form-hint">Lämna som den är om du gjorde jobbet själv.</p>
+    </div>
+    <div class="form-group">
       <label class="form-label">Datum</label>
       <input class="form-input" type="date" name="datum" value="{{ today }}">
     </div>

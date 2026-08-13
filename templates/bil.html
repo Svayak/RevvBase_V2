@@ -189,7 +189,11 @@
         <div class="handelse-kort__typ-badge">{{ "SERVICE" if h.typ == "service" else ("FEL" if h.typ == "fel" else "KM") }}</div>
         <div class="handelse-kort__miltal">{{ h.km }} <span>km</span></div>
         <div class="handelse-kort__datum">{{ h.datum }}</div>
-        {% if h.skapad_av %}<div class="handelse-kort__av">{{ h.skapad_av }}</div>{% endif %}
+        {% set utforare = h.utford_av or h.skapad_av %}
+        {% if utforare %}<div class="handelse-kort__av">{{ utforare }}</div>{% endif %}
+        {% if h.utford_av and h.skapad_av and h.utford_av != h.skapad_av %}
+        <div class="handelse-kort__av" style="opacity:0.6; font-size:0.68rem;">reg. {{ h.skapad_av }}</div>
+        {% endif %}
       </div>
       <div class="handelse-kort__right">
         {% if h.service_typer %}

@@ -245,6 +245,33 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
+def hamta_mekaniker(verkstad_id):
+    """Verkstadens mekaniker, för väljaren vid service och fel."""
+    with get_db() as conn:
+        if verkstad_id is not None:
+            rader = conn.execute(
+                "SELECT id, namn FROM mekaniker WHERE verkstad_id=? ORDER BY ordning, namn COLLATE NOCASE",
+                (verkstad_id,)
+            ).fetchall()
+        else:
+            rader = conn.execute(
+                "SELECT id, namn FROM mekaniker WHERE verkstad_id IS NULL ORDER BY ordning, namn COLLATE NOCASE"
+            ).fetchall()
+    return rader
+
+def valj_utford_av(verkstad_id, inskickat, befintligt=None):
+    """Vem som utfört jobbet. Tomt val → den inloggade.
+    Namnet valideras mot verkstadens lista så inget godtyckligt kan postas in.
+    'befintligt' tillåts alltid — annars skulle en redigering skriva över namnet
+    på gammalt arbete vars mekaniker sedan tagits bort ur listan."""
+    inskickat = (inskickat or "").strip()
+    if not inskickat:
+        return current_user.namn
+    giltiga = {m["namn"] for m in hamta_mekaniker(verkstad_id)}
+    if befintligt:
+        giltiga.add(befintligt)
+    return inskickat if inskickat in giltiga else current_user.namn
+
 SORTERINGAR = {
     "fordonsnummer": "ORDER BY fordonsnummer, regnr",
     "regnr":         "ORDER BY regnr, fordonsnummer",
@@ -586,6 +613,45 @@ def init_db():
         except Exception as e:
             print(f"Migration kategori: {e}")
 
+        # Vem som UTFÖRT arbetet, till skillnad från skapad_av som är vem som
+        # registrerade det i systemet. Ofta samma person, men inte alltid —
+        # en person kan skriva in åt hela verkstaden.
+        try:
+            conn.execute("ALTER TABLE handelser ADD COLUMN utford_av TEXT")
+        except: pass
+        # Verkstadens mekaniker — admin underhåller listan under /admin.
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS mekaniker (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                verkstad_id INTEGER,
+                namn TEXT NOT NULL,
+                ordning INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        # Seedning: plocka namn ur befintlig historik så listan inte är tom
+        # första gången admin öppnar sidan. Namnen kommer från vem som
+        # registrerat, så admin får rensa bort dem som inte är mekaniker.
+        try:
+            for v in conn.execute("SELECT id FROM verkstader").fetchall():
+                vid = v["id"]
+                if conn.execute("SELECT 1 FROM mekaniker WHERE verkstad_id=? LIMIT 1", (vid,)).fetchone():
+                    continue
+                namn = conn.execute("""
+                    SELECT DISTINCT h.skapad_av FROM handelser h
+                    JOIN bilar b ON b.id = h.bil_id
+                    WHERE b.verkstad_id=? AND h.skapad_av IS NOT NULL AND h.skapad_av<>''
+                    ORDER BY h.skapad_av
+                """, (vid,)).fetchall()
+                for i, r in enumerate(namn):
+                    conn.execute(
+                        "INSERT INTO mekaniker (verkstad_id, namn, ordning) VALUES (?,?,?)",
+                        (vid, r["skapad_av"], i)
+                    )
+                if namn:
+                    print(f"Seedade {len(namn)} mekaniker för verkstad {vid}")
+        except Exception as e:
+            print(f"Seedning mekaniker: {e}")
+
         # ── INDEX ────────────────────────────────────────────────────────────
         # Rent additivt: skapar bara uppslagsstrukturer, rör ingen data.
         # Måste ligga sist — bilar-migrationen ovan droppar tabellen (och därmed
@@ -605,6 +671,8 @@ def init_db():
                     ON servicetyper(verkstad_id, kategori, ordning);
                 CREATE INDEX IF NOT EXISTS idx_bilar_kategori
                     ON bilar(verkstad_id, kategori);
+                CREATE INDEX IF NOT EXISTS idx_mekaniker_verkstad
+                    ON mekaniker(verkstad_id, ordning);
             """)
         except Exception as e:
             print(f"Index: {e}")
@@ -829,11 +897,13 @@ def skriv_verkstad_csv(verkstad_id, fil):
                              b["marke"], b["modell"], b["arsmodell"], b["kategori"]])
         writer.writerow([])
         writer.writerow(["## HÄNDELSER"])
-        writer.writerow(["id","bil_id","regnr","fordonsnummer","marke","modell","datum","km","typ","service_typer","beskrivning"])
+        writer.writerow(["id","bil_id","regnr","fordonsnummer","marke","modell","datum","km","typ",
+                         "service_typer","beskrivning","utford_av"])
         for h in handelser:
             writer.writerow([h["id"], h["bil_id"], h["regnr"], h["fordonsnummer"],
                              h["marke"], h["modell"], h["datum"], h["km"], h["typ"],
-                             h["service_typer"], h["beskrivning"]])
+                             h["service_typer"], h["beskrivning"],
+                             h["utford_av"] or h["skapad_av"] or ""])
     return len(bilar), len(handelser)
 
 def daglig_backup():
@@ -1187,19 +1257,22 @@ def ny_handelse(bil_id):
             if typ == "service" and not service_typer_vald:
                 error = "Välj minst en serviceåtgärd."
                 return render_template("ny_handelse.html", bil=b, steg="3", km=km, typ=typ,
-                    error=error, service_typer=alla_service_typer, today=str(date.today()))
+                    error=error, service_typer=alla_service_typer, today=str(date.today()),
+                    mekaniker=hamta_mekaniker(b["verkstad_id"]))
+            utford_av = valj_utford_av(b["verkstad_id"], request.form.get("utford_av"))
             with get_db() as conn:
                 conn.execute(
-                    "INSERT INTO handelser (bil_id,datum,km,typ,service_typer,beskrivning,skapad_av) VALUES (?,?,?,?,?,?,?)",
+                    "INSERT INTO handelser (bil_id,datum,km,typ,service_typer,beskrivning,skapad_av,utford_av) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
                     (bil_id, datum, int(km), typ,
                      json.dumps(service_typer_vald) if service_typer_vald else None,
-                     beskrivning or None, current_user.namn)
+                     beskrivning or None, current_user.namn, utford_av)
                 )
             return redirect(url_for("bil", bil_id=bil_id))
 
     return render_template("ny_handelse.html", bil=b, steg=steg, km=km,
         error=error, service_typer=alla_service_typer, typ=request.args.get("typ",""),
-        today=str(date.today()))
+        today=str(date.today()), mekaniker=hamta_mekaniker(b["verkstad_id"]))
 
 @app.route("/bil/<int:bil_id>/redigera-handelse/<int:h_id>", methods=["GET","POST"])
 @login_required
@@ -1220,19 +1293,27 @@ def redigera_handelse(bil_id, h_id):
         if not km_str.isdigit():
             error = "Ange ett giltigt kilometertal."
         else:
+            # Miltal har ingen utförare — det är en avläsning, inte ett jobb.
+            if h["typ"] == "miltal":
+                utford_av = h["utford_av"]
+            else:
+                utford_av = valj_utford_av(b["verkstad_id"], request.form.get("utford_av"),
+                                           h["utford_av"] or h["skapad_av"])
             with get_db() as conn:
                 conn.execute(
-                    "UPDATE handelser SET datum=?,km=?,service_typer=?,beskrivning=? WHERE id=? AND bil_id=?",
+                    "UPDATE handelser SET datum=?,km=?,service_typer=?,beskrivning=?,utford_av=? "
+                    "WHERE id=? AND bil_id=?",
                     (datum, int(km_str),
                      json.dumps(service_typer_ny) if service_typer_ny else None,
-                     beskrivning or None, h_id, bil_id)
+                     beskrivning or None, utford_av, h_id, bil_id)
                 )
             return redirect(url_for("bil", bil_id=bil_id))
 
     service_typer = get_service_typer(b["verkstad_id"])
     service_typer = service_typer + [t for t in service_typer_vald if t not in service_typer]
     return render_template("redigera_handelse.html", bil=b, h=h,
-        service_typer=service_typer, service_typer_vald=service_typer_vald, error=error)
+        service_typer=service_typer, service_typer_vald=service_typer_vald, error=error,
+        mekaniker=hamta_mekaniker(b["verkstad_id"]))
 
 @app.route("/bil/<int:bil_id>/ny-kommentar", methods=["POST"])
 @login_required
@@ -1866,13 +1947,14 @@ def exportera_data():
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["regnr", "fordonsnummer", "marke", "modell", "arsmodell", "kategori",
-                     "datum", "km", "typ", "service_typer", "beskrivning", "skapad_av"])
+                     "datum", "km", "typ", "service_typer", "beskrivning", "utford_av", "skapad_av"])
     for b, h in handelser:
         writer.writerow([
             b["regnr"], b["fordonsnummer"] or "", b["marke"], b["modell"],
             b["arsmodell"] or "", b["kategori"] or "",
             h["datum"], h["km"], h["typ"],
-            h["service_typer"] or "", h["beskrivning"] or "", h["skapad_av"] or ""
+            h["service_typer"] or "", h["beskrivning"] or "",
+            h["utford_av"] or h["skapad_av"] or "", h["skapad_av"] or ""
         ])
     if not handelser:
         for b in bilar:
@@ -1993,7 +2075,54 @@ def admin():
     return render_template("admin.html", anvandare=anvandare, verkstad_paket=verkstad_paket,
                            paket_limits=paket_limits, error=error,
                            servicetyper=servicetyper,
+                           mekaniker=hamta_mekaniker(vid),
                            arbetsorder_marginal=get_arbetsorder_marginal(vid))
+
+@app.route("/admin/mekaniker/ny", methods=["POST"])
+@login_required
+def ny_mekaniker():
+    if current_user.roll != "admin":
+        return redirect(url_for("index"))
+    vid = current_user.verkstad_id
+    namn = request.form.get("namn", "").strip()
+    if not namn:
+        return redirect(url_for("admin") + "#mekaniker")
+    with get_db() as conn:
+        if vid is not None:
+            finns = conn.execute(
+                "SELECT 1 FROM mekaniker WHERE verkstad_id=? AND namn=? COLLATE NOCASE", (vid, namn)
+            ).fetchone()
+            maxord = conn.execute(
+                "SELECT COALESCE(MAX(ordning),-1) FROM mekaniker WHERE verkstad_id=?", (vid,)
+            ).fetchone()[0]
+        else:
+            finns = conn.execute(
+                "SELECT 1 FROM mekaniker WHERE verkstad_id IS NULL AND namn=? COLLATE NOCASE", (namn,)
+            ).fetchone()
+            maxord = conn.execute(
+                "SELECT COALESCE(MAX(ordning),-1) FROM mekaniker WHERE verkstad_id IS NULL"
+            ).fetchone()[0]
+        if not finns:
+            conn.execute("INSERT INTO mekaniker (verkstad_id, namn, ordning) VALUES (?,?,?)",
+                         (vid, namn, maxord + 1))
+    return redirect(url_for("admin") + "#mekaniker")
+
+@app.route("/admin/mekaniker/ta-bort/<int:m_id>", methods=["POST"])
+@login_required
+def ta_bort_mekaniker(m_id):
+    if current_user.roll != "admin":
+        return redirect(url_for("index"))
+    vid = current_user.verkstad_id
+    with get_db() as conn:
+        rad = conn.execute("SELECT verkstad_id FROM mekaniker WHERE id=?", (m_id,)).fetchone()
+        if rad is None:
+            return redirect(url_for("admin") + "#mekaniker")
+        if vid is not None and rad["verkstad_id"] != vid:
+            abort(403)
+        # Historiken rörs inte — utford_av är sparat som text på händelsen,
+        # så redan utfört arbete behåller sitt namn.
+        conn.execute("DELETE FROM mekaniker WHERE id=?", (m_id,))
+    return redirect(url_for("admin") + "#mekaniker")
 
 @app.route("/admin/arbetsorder-marginal", methods=["POST"])
 @login_required

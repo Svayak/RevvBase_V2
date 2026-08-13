@@ -192,6 +192,49 @@
   </div>
 </div>
 
+<!-- Mekaniker -->
+<div id="mekaniker" style="max-width:560px; margin-top:2.5rem;">
+  <h3 class="section-title">Mekaniker</h3>
+  <p style="font-size:0.85rem; color:var(--text-muted); line-height:1.6; margin:0.4rem 0 1.25rem;">
+    Namnen som går att välja under <strong>Utförd av</strong> när någon loggar en service eller
+    ett åtgärdat fel. Den som är inloggad står alltid som förval — listan behövs bara när
+    någon registrerar åt en kollega. Att ta bort ett namn påverkar inte redan sparad historik.
+  </p>
+
+  <div class="form-card">
+    {% if mekaniker %}
+    <table class="admin-table" style="margin-bottom:1rem;">
+      <tbody>
+        {% for m in mekaniker %}
+        <tr>
+          <td>{{ m.namn }}</td>
+          <td style="text-align:right;">
+            <form method="post" action="{{ url_for('ta_bort_mekaniker', m_id=m.id) }}"
+                  style="display:inline;" onsubmit="return confirm('Ta bort {{ m.namn }} ur listan?')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="delete-btn" title="Ta bort">✕</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="font-size:0.85rem; color:var(--text-muted); margin:0 0 1rem;">
+      Inga mekaniker inlagda. Tills du lägger till några står den inloggade som utförare.
+    </p>
+    {% endif %}
+
+    <form method="post" action="{{ url_for('ny_mekaniker') }}"
+          style="display:flex; gap:0.5rem; align-items:flex-end; flex-wrap:wrap;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input class="form-input" type="text" name="namn" placeholder="Namn på mekaniker" required
+             style="flex:1; min-width:180px;">
+      <button type="submit" class="btn btn-primary btn-sm">Lägg till</button>
+    </form>
+  </div>
+</div>
+
 <!-- Arbetsorder -->
 <div id="arbetsorder" style="max-width:560px; margin-top:2.5rem;">
   <h3 class="section-title">Arbetsorder</h3>

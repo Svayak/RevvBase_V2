@@ -38,6 +38,25 @@
       <textarea class="form-input form-textarea" name="beskrivning" rows="4">{{ h.beskrivning or '' }}</textarea>
     </div>
 
+    {% if h.typ != "miltal" %}
+    {% set nuvarande = h.utford_av or h.skapad_av %}
+    <div class="form-group">
+      <label class="form-label">Utförd av</label>
+      <select class="form-input" name="utford_av">
+        <option value="">{{ current_user.namn }} (jag)</option>
+        {% set namnlista = mekaniker | map(attribute='namn') | list %}
+        {% if nuvarande and nuvarande not in namnlista and nuvarande != current_user.namn %}
+        <option value="{{ nuvarande }}" selected>{{ nuvarande }}</option>
+        {% endif %}
+        {% for m in mekaniker %}
+          {% if m.namn != current_user.namn %}
+          <option value="{{ m.namn }}" {% if nuvarande == m.namn %}selected{% endif %}>{{ m.namn }}</option>
+          {% endif %}
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+
     <div class="form-row-btns">
       <a href="{{ url_for('bil', bil_id=bil.id) }}" class="btn btn-ghost">Avbryt</a>
       <button type="submit" class="btn btn-primary">Spara ändringar</button>

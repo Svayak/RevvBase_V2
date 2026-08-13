@@ -34,6 +34,7 @@
         <th>Km</th>
         <th>Typ</th>
         <th>Åtgärder / Beskrivning</th>
+        <th>Utförd av</th>
       </tr>
     </thead>
     <tbody>
@@ -45,6 +46,7 @@
         <td>
           {% if h.service_typer_lista %}{{ h.service_typer_lista | join(', ') }}{% endif %}
         </td>
+        <td>{{ h.utford_av or h.skapad_av or '' }}</td>
       </tr>
       {% endfor %}
     </tbody>
