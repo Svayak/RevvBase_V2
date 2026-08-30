@@ -1048,6 +1048,11 @@ code { background: var(--bg3); padding: 0.1rem 0.4rem; border-radius: 3px; font-
 .km-historik__km { font-weight: 600; }
 .km-historik__meta { color: var(--text-muted); font-size: 0.78rem; }
 .km-historik__diff { color: var(--text-muted); font-size: 0.78rem; }
+.km-historik__diff--minus { color: #d08a30; }
+/* Krysset för att ta bort en avläsning ska alltid synas. .delete-btn har
+   opacity:0 och tänds bara av .handelse-kort:hover — raderna här har ingen
+   sådan förälder, så knappen var osynlig och gick i praktiken inte att nå. */
+.km-historik__rad .delete-btn { opacity: 1; }
 .km-panel__toggle {
   background: none;
   border: none;

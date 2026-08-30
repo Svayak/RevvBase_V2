@@ -47,8 +47,11 @@
       {% for h in km_historik %}
       <div class="km-historik__rad">
         <span class="km-historik__km">{{ h.km }} km</span>
-        <span class="km-historik__diff">
-          {%- if not loop.last %}+{{ h.km - km_historik[loop.index0 + 1].km }} km{% endif -%}
+        {# Skillnad mot föregående avläsning. Kan bli negativ nu när listan
+           sorteras på datum: en korrigering nedåt är inte längre osynlig. #}
+        {% set diff = (h.km - km_historik[loop.index0 + 1].km) if not loop.last else None %}
+        <span class="km-historik__diff{% if diff is not none and diff < 0 %} km-historik__diff--minus{% endif %}">
+          {%- if diff is not none %}{% if diff >= 0 %}+{% endif %}{{ diff }} km{% endif -%}
         </span>
         <span class="km-historik__meta">
           {{ h.datum }}{% if h.skapad_av %} · {{ h.skapad_av }}{% endif %}

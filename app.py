@@ -240,6 +240,14 @@ STANDARD_INTERVALL = {
     },
 }
 
+# Händelser sorteras på datum, inte på km. Mätarställningen som räknas som
+# "aktuell" (och som alla serviceintervall mäts mot) är den senast loggade,
+# inte den högsta. Annars kunde en felskrivning på 999999 km låsa fast bilens
+# nedräkning för alltid, och en korrigering nedåt fick ingen effekt.
+# id DESC som andrahandssortering: datum saknar klockslag, så flera avläsningar
+# samma dag ordnas efter i vilken ordning de registrerades.
+HANDELSE_ORDER = "datum DESC, id DESC"
+
 def get_db():
     conn = sqlite3.connect(DB)
     conn.row_factory = sqlite3.Row
@@ -659,6 +667,8 @@ def init_db():
         try:
             conn.executescript("""
                 CREATE INDEX IF NOT EXISTS idx_handelser_bil_km   ON handelser(bil_id, km DESC);
+                CREATE INDEX IF NOT EXISTS idx_handelser_bil_datum
+                    ON handelser(bil_id, datum DESC, id DESC);
                 CREATE INDEX IF NOT EXISTS idx_kommentarer_bil    ON kommentarer(bil_id);
                 CREATE INDEX IF NOT EXISTS idx_serviceintervall_bil ON serviceintervall(bil_id);
                 CREATE INDEX IF NOT EXISTS idx_bilar_verkstad     ON bilar(verkstad_id);
@@ -765,6 +775,9 @@ def get_arbetsorder_marginal(verkstad_id):
     return ARBETSORDER_MARGINAL_STANDARD
 
 def bygg_panel(bil_id, marke, modell, handelser, senaste_km, arsmodell=None, verkstad_id=None):
+    """Nedräkning per servicetyp. 'handelser' måste komma sorterad enligt
+    HANDELSE_ORDER (senast loggade först) — den första träffen per servicetyp
+    tas som den senast utförda."""
     intervaller = get_intervall(bil_id, marke, modell, arsmodell, verkstad_id)
     senaste_per_typ = {}
     for h in handelser:
@@ -1132,20 +1145,20 @@ def bil(bil_id):
         if filter_typ:
             handelser = conn.execute(
                 "SELECT * FROM handelser WHERE bil_id=? AND typ<>'miltal' AND service_typer LIKE ? "
-                "ORDER BY km DESC, datum DESC",
+                f"ORDER BY {HANDELSE_ORDER}",
                 (bil_id, f"%{filter_typ}%")
             ).fetchall()
         else:
             handelser = conn.execute(
-                "SELECT * FROM handelser WHERE bil_id=? AND typ<>'miltal' ORDER BY km DESC, datum DESC",
+                f"SELECT * FROM handelser WHERE bil_id=? AND typ<>'miltal' ORDER BY {HANDELSE_ORDER}",
                 (bil_id,)
             ).fetchall()
         km_historik = conn.execute(
-            "SELECT * FROM handelser WHERE bil_id=? AND typ='miltal' ORDER BY km DESC, datum DESC",
+            f"SELECT * FROM handelser WHERE bil_id=? AND typ='miltal' ORDER BY {HANDELSE_ORDER}",
             (bil_id,)
         ).fetchall()
         alla_handelser = conn.execute(
-            "SELECT * FROM handelser WHERE bil_id=? ORDER BY km DESC", (bil_id,)
+            f"SELECT * FROM handelser WHERE bil_id=? ORDER BY {HANDELSE_ORDER}", (bil_id,)
         ).fetchall()
         kommentarer = conn.execute(
             "SELECT * FROM kommentarer WHERE bil_id=? AND (avklarad_datum IS NULL OR avklarad_datum='') ORDER BY id DESC",
@@ -1373,7 +1386,15 @@ def aterstall_kommentar(bil_id, k_id):
 def ta_bort_handelse(bil_id, h_id):
     check_bil_access(bil_id)
     with get_db() as conn:
+        rad = conn.execute(
+            "SELECT typ FROM handelser WHERE id=? AND bil_id=?", (h_id, bil_id)
+        ).fetchone()
         conn.execute("DELETE FROM handelser WHERE id=? AND bil_id=?", (h_id, bil_id))
+    # Kom tillbaka till km-panelen med historiken öppen när det var en
+    # mätarställning som togs bort — annars slås listan ihop och det ser ut
+    # som att ingenting hände.
+    if rad and rad["typ"] == "miltal":
+        return redirect(url_for("bil", bil_id=bil_id) + "#km")
     return redirect(url_for("bil", bil_id=bil_id))
 
 @app.route("/bil/<int:bil_id>/ta-bort", methods=["POST"])
@@ -1393,7 +1414,7 @@ def print_bil(bil_id):
     b = check_bil_access(bil_id)
     with get_db() as conn:
         rader = conn.execute(
-            "SELECT * FROM handelser WHERE bil_id=? AND typ='service' ORDER BY km DESC", (bil_id,)
+            f"SELECT * FROM handelser WHERE bil_id=? AND typ='service' ORDER BY {HANDELSE_ORDER}", (bil_id,)
         ).fetchall()
     handelser = []
     for h in rader:
@@ -1421,7 +1442,7 @@ def kommande():
         bil_ids = [b["id"] for b in bilar]
         marks = ",".join("?" * len(bil_ids))
         alla_handelser = conn.execute(
-            "SELECT * FROM handelser WHERE bil_id IN ({}) ORDER BY km DESC".format(marks), bil_ids
+            "SELECT * FROM handelser WHERE bil_id IN ({}) ORDER BY {}".format(marks, HANDELSE_ORDER), bil_ids
         ).fetchall()
         alla_si = conn.execute(
             "SELECT bil_id, service_typ, intervall_km, aktiv FROM serviceintervall WHERE bil_id IN ({})".format(marks), bil_ids
@@ -1530,7 +1551,7 @@ def arbetsorder():
         b_ids = [b["id"] for b in bilar]
         bmarks = ",".join("?" * len(b_ids))
         alla_handelser = conn.execute(
-            "SELECT * FROM handelser WHERE bil_id IN ({}) ORDER BY km DESC".format(bmarks), b_ids
+            "SELECT * FROM handelser WHERE bil_id IN ({}) ORDER BY {}".format(bmarks, HANDELSE_ORDER), b_ids
         ).fetchall()
         alla_si = conn.execute(
             "SELECT bil_id, service_typ, intervall_km, aktiv FROM serviceintervall WHERE bil_id IN ({})".format(bmarks), b_ids
@@ -1949,7 +1970,7 @@ def exportera_data():
         handelser = []
         for b in bilar:
             hs = conn.execute(
-                "SELECT * FROM handelser WHERE bil_id=? ORDER BY km DESC", (b["id"],)
+                f"SELECT * FROM handelser WHERE bil_id=? ORDER BY {HANDELSE_ORDER}", (b["id"],)
             ).fetchall()
             for h in hs:
                 handelser.append((b, h))
