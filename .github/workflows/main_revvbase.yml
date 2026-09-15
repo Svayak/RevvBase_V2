@@ -37,6 +37,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: python-app
+          # Artefakten behövs bara de minuter deploy-jobbet hämtar den. 90
+          # dagars default fyllde kontots delade lagringskvot och stoppade
+          # bygget i ett annat repo.
+          retention-days: 1
           path: |
             .
             !antenv/
